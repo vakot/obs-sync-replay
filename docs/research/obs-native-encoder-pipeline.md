@@ -158,8 +158,7 @@ two identities explicit rather than infer either one from callback order.
 ## Graphics lag / duplicated-slot semantics
 
 The following source findings use the pinned OBS Studio 32.2.1 tree. The runtime
-evidence below is from the still-running NVENC research session; it was read from
-the portable log without restarting OBS.
+evidence is from the explicit 40 ms NVENC lag-injection run in the portable OBS log.
 
 ### PROVEN
 
@@ -176,62 +175,100 @@ the portable log without restarting OBS.
    [`libobs/media-io/video-io.c:126-214`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L126-L214)).
    Thus a repeated image occupies consecutive CTS slots; `count > 1` does not by
    itself assign one CTS to multiple repeated raw frames.
-3. The **GPU/texture** path intentionally duplicates its most recent texture when
-   a queued frame has `count > 1`. The GPU encode thread decrements `tf.count`,
-   increments `tf.timestamp` by its frame interval, and queues the texture again
-   until all slots have been emitted
-   ([`libobs/obs-video.c:442-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L515),
+3. The **GPU/texture** path is not equivalent to passing that `count` straight to
+   one texture. `output_gpu_encoders` pops the queued `obs_vframe_info` on a later
+   graphics iteration and calls `queue_frame` once per remaining count
+   ([`libobs/obs-video.c:518-536`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L518-L536),
+   [`libobs/obs-video.c:512-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L512-L515)).
+   For the first iteration of a `count = 2` record when the GPU queue already has
+   a texture, `queue_frame` increments the *last queued* `obs_tex_frame.count`
+   without changing its timestamp.  The second iteration has `count = 1`, so it
+   allocates a new texture with the original `vframe_info.timestamp`
+   ([`libobs/obs-video.c:442-507`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L507)).
+4. The GPU encode thread records CTS from the texture frame it popped.  It advances
+   a texture timestamp only when requeuing a remaining count
+   ([`libobs/obs-video-gpu-encode.c:60-194`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L60-L194),
    [`libobs/obs-video-gpu-encode.c:199-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L199-L210)).
-   Again, the intended repeated-image slots have consecutive CTS values.
-4. `encoder->cur_pts` advances once for each successful raw encode request and for
+   Thus, if the last queued texture is the preceding rendered slot `X - Δ`, the
+   augmented texture emits `X - Δ` then `X`, while the newly queued texture also
+   emits `X`. The texture queue has produced two `X` CTS requests and no request
+   carrying the logical repeated-slot CTS `X + Δ`.
+5. `encoder->cur_pts` advances once for each successful raw encode request and for
    every texture encode iteration. It is independent of the composition timestamp
    ([`libobs/obs-encoder.c:1623-1638`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1623-L1638),
    [`libobs/obs-video-gpu-encode.c:154-194`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L154-L194)).
-5. For each encode request, libobs records an `encoder_packet_time` keyed by native
+6. For each encode request, libobs records an `encoder_packet_time` keyed by native
    PTS with the supplied raw frame timestamp or texture timestamp as CTS. A packet
    callback receives the timing record selected by exact native PTS match; it is not
    selected by callback order
    ([`libobs/obs-encoder.c:1417-1503`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1417-L1503),
    [`libobs/obs-output.c:1716-1754`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L1716-L1754)).
-6. Each `obs_view_add` mix owns its raw/GPU queues and, for texture encoders, its
+7. `obs_nvenc_h264_tex` selects this texture route and passes the libobs local PTS
+   to NVENC as `inputTimeStamp`; it does not manufacture or alter CTS
+   ([`plugins/obs-nvenc/venc.c:1403-1421`](https://github.com/obsproject/obs-studio/blob/32.2.1/plugins/obs-nvenc/venc.c#L1403-L1421),
+   [`plugins/obs-nvenc/venc-d3d11.c:210-263`](https://github.com/obsproject/obs-studio/blob/32.2.1/plugins/obs-nvenc/venc-d3d11.c#L210-L263),
+   [`plugins/obs-nvenc/venc.c:1284-1296`](https://github.com/obsproject/obs-studio/blob/32.2.1/plugins/obs-nvenc/venc.c#L1284-L1296)).
+8. Each `obs_view_add` mix owns its raw/GPU queues and, for texture encoders, its
    own GPU encode thread. An encoder group gives a common start timestamp; it does
    not make later per-mix queue consumption or `cur_pts` advancement atomic across
    two views.
 
-### INFERRED FROM THE PRESERVED NVENC LOG
+### PROVEN: the 40 ms NVENC CTS alias
 
-Two one-frame graphics-lag events produced the same shape:
+The 40 ms run directly matches the texture-queue transition above. For example,
+at `00:29:33.919` its source-derived timeline recorded a repeated logical slot
+`X + Δ = 90797321373222` anchored to rendered slot
+`X = 90797304706556`. Starting at `00:29:34.179`, both outputs accumulated two
+packet observations for CTS `X`, with consecutive local PTS values; the log contains
+no packet observation for `X + Δ`. The same shape repeated at every injected lag
+boundary, although the A/B callback order varied. Normal single-packet validation
+resumed after each boundary without observed accumulating drift.
+
+The exact source/runtime sequence is:
 
 ```text
-21:33:31.488  cadence discontinuity ... lagged_frames=13 master_frame_id=77465
-21:33:31.723  single CTS set for master_frame_id=77464: A PTS=77444, B PTS=77445
-21:33:31.764/781  additional B then A observations for CTS=80234874040704
+vframe_info { timestamp = X, count = 2 }
+  first queue_frame call: increment pending texture { timestamp = X - Δ, count }
+  second queue_frame call: enqueue new texture { timestamp = X, count = 1 }
 
-21:34:48.764  cadence discontinuity ... lagged_frames=14 master_frame_id=82101
-21:34:49.030  single CTS set for master_frame_id=82100: A PTS=82082, B PTS=82081
-21:34:49.034/054  additional A then B observations for CTS=80312157370946
+GPU worker: pending texture -> CTS X - Δ, then CTS X
+GPU worker: newly queued texture -> CTS X
 ```
 
-Later sampled validations returned to the single-packet/equal-PTS normal-cadence
-shape, so this was not observed as accumulating drift. The anomaly CTS belongs to
-the master slot immediately before the logged cadence discontinuity. This is
-consistent with independent queue latency around the lag boundary, but it is not
-yet a proven causal explanation.
+This is a libobs 32.2.1 texture-queue timing behavior, not an NVENC reordering or
+an error in `LogicalVideoSlot` generation. The separate raw path gives x264 one
+input callback per `count`, incrementing its timestamp after each callback, so it
+correctly emits `X` and `X + Δ` for the same source event. The invariant affected is
+the asynchronous identity-preservation invariant: a texture packet CTS is not a
+one-to-one public key for a logical slot across this lag boundary.
 
-### UNRESOLVED
+### Encoder-agnostic association requirement
 
-- The documented `count` paths advance CTS for each repeated slot, so they do not
-  alone explain multiple output callbacks with the **same** CTS. The next run must
-  capture every packet, its previous packet, and the complete per-CTS packet set to
-  determine whether the duplicate callback reflects separate encode requests,
-  output interleaving/timing association, or another queue boundary.
-- Whether x264 reproduces the same CTS/PTS shape under deliberate graphics lag is
-  untested. Its raw path is source-distinct from NVENC's texture path.
-- Public packet timing identifies CTS and native PTS, but does not expose an
-  explicit original-versus-duplicated-slot flag or the private `count` value.
-- Consequently, equal native encoder PTS is not yet proven as a universal A/B
-  invariant, and the current prototype cannot yet claim the product's strong
-  reconstruction guarantee under graphics lag.
+The smallest model that supports both paths keeps `LogicalVideoSlot` canonical and
+adds an explicit, submission-time association:
+
+```text
+EncoderInputAssociation {
+  logical_slot_id;          // canonical source identity
+  composition_cts_ns;       // may be many-to-one for a reused texture
+  encoder_request_token;    // per-encoder local correlation only
+  composition_disposition;  // direct render or reused composition
+}
+```
+
+Raw/x264 produces a direct association for each slot. The texture path must produce
+an association at its private queue/encode boundary for every request, including a
+reused composition. The output callback may use the request token only to recover
+that already-created association; neither native PTS nor callback order may create
+or replace the canonical slot identity.
+
+OBS's public packet callback exposes only native PTS and CTS, not this queue decision,
+the private `count`, or a source-supplied logical-slot tag. Therefore the current
+plugin cannot safely infer the missing `X + Δ` association for texture encoders.
+It continues to retain the bounded same-CTS packet set as an explicit unsupported
+lag condition. Implementing a correct association requires a supported libobs
+association hook (or plugin-owned submission boundary) before this native path can
+meet the production replay guarantee.
 
 ### Research instrumentation and production direction
 
@@ -244,12 +281,9 @@ and B packets for that CTS. Timeline logs carry previous master PTS, configured
 interval, cadence delta, and lagged-frame count.
 
 This is instrumentation only: it does not pair by arrival order, repair PTS,
-rewrite CTS, fabricate MasterFrames, or silently discard extra packets. The
-recommended production direction is to model every canonical temporal slot
-explicitly and require both outputs to provide one unambiguous representation for
-that slot. Until source-plus-runtime evidence defines the repeated/missing-slot
-mapping, a lagged packet set must be retained as a diagnosed, unsupported condition
-rather than accepted as approximately synchronized.
+rewrite CTS, fabricate MasterFrames, or silently discard extra packets. The bounded
+diagnostic remains the correct behavior until a supported association hook supplies
+the exact texture-submission decision.
 
 ### Deterministic graphics-lag reproduction
 
@@ -283,12 +317,13 @@ the elapsed interval count. A delay above two 16.67 ms intervals (35--40 ms in
 practice) is required to request a duplicated-slot event. These are controlled
 stress inputs, not a guarantee about host scheduling.
 
-The first uncommitted NVENC control run at 1920x1080/60 applied 25 ms at a cadence
+The first NVENC control run at 1920x1080/60 applied 25 ms at a cadence
 of 600 master frames. It recorded 13 injection events and continued to emit normal
 single-packet A/B validations, but recorded zero graphics-lag counter changes and
 zero cadence discontinuities. This is expected control evidence, not a successful
-duplicated-slot run and makes no claim about reproducing the preserved same-CTS
-anomaly. The required 35--40 ms NVENC run and x264 comparison remain pending.
+duplicated-slot run and makes no claim about reproducing the same-CTS anomaly. The
+subsequent 40 ms NVENC run and x264 comparison established the distinct raw and
+texture behaviors documented above.
 
 Baseline context remains important: the previous clean long run processed 133,342
 master frames in about 37 minutes with zero observed rendering/encoding lag and an
@@ -322,14 +357,15 @@ The source establishes the following.
    continue `X + 2Δ`, `X + 3Δ`, and so on
    ([`video-io.c:126-214`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L126-L214),
    [`video-io.c:509-543`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L509-L543)).
-3. The texture path has the same source-defined CTS progression. `queue_frame`
-   represents duplication by incrementing one texture frame's count. The GPU
-   encode thread records `ept.cts = tf.timestamp` for each request, then increments
-   `tf.timestamp` by its interval before placing a remaining count back on the
-   queue ([`obs-video.c:442-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L515),
-   [`obs-video-gpu-encode.c:154-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L154-L210)).
-   OBS 32.2.1 therefore does **not** source-document intentional reuse of one CTS
-   for two texture encode requests.
+3. The texture path consumes a lagged record at a separate, later queue boundary.
+   For `count = 2` with a pending texture, the first `queue_frame` call increments
+   that previous texture's count without changing its timestamp; the second call
+   enqueues a new texture with the original `X` timestamp. The GPU worker advances
+   the previous texture timestamp only after encoding it
+   ([`obs-video.c:442-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L515),
+   [`obs-video-gpu-encode.c:60-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L60-L210)).
+   With the usual preceding pending texture `X - Δ`, both the advanced prior texture
+   and newly queued texture carry CTS `X`; no texture request carries `X + Δ`.
 4. Both paths issue encoder requests with the encoder's local `cur_pts` and
    advance it once after each successful request. Libobs records each
    `encoder_packet_time` with that PTS and the request CTS; output delivery matches
@@ -348,16 +384,16 @@ started output creates a new per-encoder epoch. A frame-rate change is likewise 
 explicit logical-timeline boundary; this prototype does not infer repeated slots
 across it.
 
-The reported 40 ms injected runs are consistent with the raw-path source model:
+The 40 ms x264 run proves the raw-path source model:
 x264's `CTS = X + Δ` is an OBS-created repeated logical slot, not an encoder error.
-The reported NVENC same-CTS double observations conflict with the 32.2.1 texture
-source trace above. They remain a diagnosed research discrepancy; the experiment
-does not reinterpret them through a PTS activation offset or callback arrival order.
+The 40 ms NVENC same-CTS double observations are the proven texture-queue alias
+above. The experiment does not reinterpret either behavior through a PTS activation
+offset or callback arrival order.
 
 For validation only, the branch now expands the constant-FPS gap between adjacent
 rendered `MasterFrame` observations into `LogicalVideoSlot` records. A repeated
 slot carries its preceding rendered frame as an anchor and is indexed by its source
-derived CTS. Packets join that registry by CTS. This accepts x264's legitimate
+derived CTS. Direct CTS matching accepts x264's legitimate
 `X + Δ` slot while retaining a repeated same-CTS NVENC packet set as observable
 evidence. It is not a production refactor, does not alter `MasterFrame`, and does
 not claim that `encoder_pts - activation_base_pts` is safe for synchronization.
@@ -365,9 +401,8 @@ not claim that `encoder_pts - activation_base_pts` is safe for synchronization.
 The local 1920x1080/60 x264 probe used a 40 ms delay every 300 rendered frames. It
 produced 12 cadence discontinuities, 12 increments of `lagged_frames`, and 12
 registered repeated logical slots, with zero `has no known OBS logical slot`
-diagnostics. The next clean run will also retain INFO-level successful A/B packet
-validation for every repeated slot. The active probe did not exit after a normal
-close request, so no forced termination was used.
+diagnostics. Its repeated slots retained distinct CTS values and passed the existing
+A/B packet validation.
 
 ## Source trace: `video_t` to `obs_encoder_t`
 
