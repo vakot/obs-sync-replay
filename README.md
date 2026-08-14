@@ -5,10 +5,6 @@ separately rendered scenes as two MKV replay files on one shared video timeline.
 Frame-perfect pairing is the product: two independently started replay outputs are
 not an acceptable architecture.
 
-The project currently implements Phase 1: a canonical OBS master-frame coordinator.
-It observes the OBS graphics cadence and issues immutable frame identity and PTS
-values, but deliberately implements no rendering, encoding, replay, or UI behavior.
-
 The supported MVP platform is Windows x64 with OBS Studio 32.2.1. Start development
 with the copyable configure, build, portable deployment, and debugging workflow in
 [`docs/building.md`](docs/building.md).

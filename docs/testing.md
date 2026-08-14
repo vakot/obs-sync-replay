@@ -70,6 +70,16 @@ As components appear, cover:
 Prefer injected ticks and deterministic fake render/encoder completions. Tests must
 not depend on sleeps to create ordering.
 
+### Phase 3 retained-pipeline coverage
+
+`synchronized-frame-queue-test` is OBS-independent and covers one complete pair,
+unchanged master identity, FIFO ordering, deterministic bounded-capacity rejection,
+half/divergent-pair rejection, and reset without stale identity. GPU copy behavior is
+validated in portable OBS because the queue test intentionally does not mock libobs
+graphics internals. Runtime logs must show a matching master identity in timeline,
+render, and retained-pipeline events; capacity rejection is a valid explicit pressure
+outcome, never a reason to advance one output separately.
+
 ### Integration tests
 
 When libobs and encoder integration exists, verify lifecycle, ownership, thread use,
