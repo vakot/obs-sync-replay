@@ -188,6 +188,38 @@ cadence-discontinuity diagnostic instead of inventing unobserved frames. Future
 rendering work must attach to the already-issued `MasterFrame`; it must not fill the
 gap with an independently generated timeline.
 
+## Dual-Scene Rendering Integration (Phase 2)
+
+Phase 2 consumes the `MasterFrame` directly from `MasterFrameCoordinator`; it creates
+no render timer, per-scene callback, or secondary PTS source. The coordinator tick is
+on libobs's graphics thread but executes after libobs leaves its graphics context.
+For each accepted frame, `SynchronizedSceneRenderer` calls `obs_enter_graphics()`,
+renders Scene A and Scene B synchronously, and calls `obs_leave_graphics()` after both
+attempts. OBS 32.2.1's own `ScreenshotObj` uses this same supported context-enter
+pattern from a tick callback. This is deliberately not a queued "latest frame"
+handoff: the two attempts occur in the callback that owns the supplied frame.
+
+Each `SceneRenderer` resolves its development scene name (`Gameplay Test` or `Camera
+Test`) with `obs_get_source_by_name` for the individual attempt. That API returns a
+strong source reference, released immediately after rendering. The renderer verifies
+that the source is an `obs_scene_t`, obtains its native `obs_source_get_width` and
+`obs_source_get_height`, and renders it with `obs_source_video_render` into its own
+`gs_texrender_t` target. The target uses the source's reported graphics color space
+and is recreated if that space changes; target dimensions are the source's native
+dimensions for that attempt. The target is created and destroyed only while the
+graphics context is entered. Its texture is GPU-only and remains owned by the
+renderer until that renderer's next render or destruction; Phase 2 does not retain
+textures for encoding or buffering.
+
+`SceneRenderResult` copies the immutable `MasterFrame` and records a fixed A/B slot,
+status, dimensions, and non-owning texture pointer. `SceneRenderPairTracker` accepts
+only the active frame's exact ID and PTS and only one result per slot. Every frame
+therefore attempts A and B even if either fails. Missing, invalid, or unavailable
+scenes retain the current master slot and emit a diagnostic; subsequent frames never
+replace that missing result. The unresolved Phase 3 concern is how to retain or copy
+these short-lived GPU textures under encoder/backpressure without weakening this
+identity contract.
+
 ## Replay Save Contract
 
 One hotkey invocation creates a replay ID and snapshots one immutable inclusive range:
