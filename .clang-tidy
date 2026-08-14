@@ -1,0 +1,15 @@
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cppcoreguidelines-avoid-goto,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-pro-type-member-init,
+  modernize-use-nullptr,
+  performance-*,
+  portability-*,
+  readability-duplicate-include,
+  readability-inconsistent-declaration-parameter-name
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|tests)[\\/]'
+FormatStyle: file
