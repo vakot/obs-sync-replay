@@ -69,17 +69,22 @@ void SynchronizedSceneRenderer::RecordAndLog(const SceneRenderResult &result) {
         return;
     }
 
-    const int log_level = result.status == SceneRenderStatus::Rendered
-                              ? ((result.master_frame.frame_id() < 3 || result.master_frame.frame_id() % 300 == 0)
-                                     ? LOG_INFO
-                                     : LOG_DEBUG)
-                              : LOG_WARNING;
+    const size_t output_index = result.output == OutputSlot::A ? 0 : 1;
+    const bool status_changed = !last_reported_status_[output_index].has_value() ||
+                                *last_reported_status_[output_index] != result.status;
+    last_reported_status_[output_index] = result.status;
+    const bool sampled = result.master_frame.frame_id() < 3 || result.master_frame.frame_id() % 300 == 0;
+    if (result.status != SceneRenderStatus::Rendered && !status_changed && !sampled) {
+        return;
+    }
+
+    const int log_level = result.status == SceneRenderStatus::Rendered ? (sampled ? LOG_INFO : LOG_DEBUG) : LOG_WARNING;
     blog(log_level,
          "[sync-render] invariant=4 master_frame_id=%llu master_pts=%llu output=%s scene=%s width=%u height=%u "
-         "status=%s",
+         "color_space=%u color_format=%u status=%s",
          static_cast<unsigned long long>(result.master_frame.frame_id()),
          static_cast<unsigned long long>(result.master_frame.pts_ns()), OutputSlotName(result.output), result.scene_name.c_str(),
-         result.width, result.height, SceneRenderStatusName(result.status));
+         result.width, result.height, result.color_space, result.color_format, SceneRenderStatusName(result.status));
 }
 
 } // namespace obs_sync_replay

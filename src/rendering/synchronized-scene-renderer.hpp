@@ -2,6 +2,8 @@
 
 #include "rendering/scene-render-pair-tracker.hpp"
 
+#include <array>
+#include <optional>
 #include <string>
 
 namespace obs_sync_replay {
@@ -25,6 +27,7 @@ private:
     SceneRenderer scene_a_renderer_;
     SceneRenderer scene_b_renderer_;
     SceneRenderPairTracker pair_tracker_;
+    std::array<std::optional<SceneRenderStatus>, 2> last_reported_status_;
     bool stopped_ = false;
 };
 

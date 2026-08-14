@@ -31,7 +31,7 @@ MasterFrame Frame(const uint64_t pts_ns) {
 }
 
 SceneRenderResult Result(const MasterFrame &frame, const OutputSlot output) {
-    return {frame, output, SceneRenderStatus::Rendered, "test scene", 1920, 1080, nullptr};
+    return {frame, output, SceneRenderStatus::Rendered, "test scene", 1920, 1080, 0, 0, nullptr};
 }
 
 void TestOneMasterFrameRequiresOneAttemptPerOutput() {

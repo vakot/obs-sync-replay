@@ -31,7 +31,7 @@ SceneRenderer::~SceneRenderer() {
 }
 
 SceneRenderResult SceneRenderer::Render(const MasterFrame &master_frame) {
-    SceneRenderResult result{master_frame, output_, SceneRenderStatus::MissingScene, scene_name_, 0, 0, nullptr};
+    SceneRenderResult result{master_frame, output_, SceneRenderStatus::MissingScene, scene_name_, 0, 0, 0, 0, nullptr};
     SourceReference scene_source(obs_get_source_by_name(scene_name_.c_str()));
     if (!scene_source) {
         return result;
@@ -51,6 +51,8 @@ SceneRenderResult SceneRenderer::Render(const MasterFrame &master_frame) {
 
     const gs_color_space color_space = obs_source_get_color_space(scene_source.get(), 0, nullptr);
     const gs_color_format color_format = gs_get_format_from_space(color_space);
+    result.color_space = static_cast<uint32_t>(color_space);
+    result.color_format = static_cast<uint32_t>(color_format);
     if (render_target_ && gs_texrender_get_format(render_target_) != color_format) {
         gs_texrender_destroy(render_target_);
         render_target_ = nullptr;
@@ -58,8 +60,16 @@ SceneRenderResult SceneRenderer::Render(const MasterFrame &master_frame) {
     if (!render_target_) {
         render_target_ = gs_texrender_create(color_format, GS_ZS_NONE);
     }
-    if (!render_target_ || !gs_texrender_begin_with_color_space(render_target_, result.width, result.height, color_space)) {
-        result.status = SceneRenderStatus::RenderTargetUnavailable;
+    if (!render_target_) {
+        result.status = SceneRenderStatus::RenderTargetCreationFailed;
+        return result;
+    }
+
+    // libobs marks a texrender as rendered in gs_texrender_end. Reset it before
+    // its next master-frame render; this does not assign temporal identity.
+    gs_texrender_reset(render_target_);
+    if (!gs_texrender_begin_with_color_space(render_target_, result.width, result.height, color_space)) {
+        result.status = SceneRenderStatus::RenderTargetBeginFailed;
         return result;
     }
 
@@ -109,8 +119,10 @@ const char *SceneRenderStatusName(const SceneRenderStatus status) noexcept {
         return "not-a-scene";
     case SceneRenderStatus::InvalidDimensions:
         return "invalid-dimensions";
-    case SceneRenderStatus::RenderTargetUnavailable:
-        return "render-target-unavailable";
+    case SceneRenderStatus::RenderTargetCreationFailed:
+        return "render-target-creation-failed";
+    case SceneRenderStatus::RenderTargetBeginFailed:
+        return "render-target-begin-failed";
     }
 
     return "unknown";

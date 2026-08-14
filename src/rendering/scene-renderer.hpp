@@ -22,7 +22,8 @@ enum class SceneRenderStatus : uint8_t {
     MissingScene,
     NotAScene,
     InvalidDimensions,
-    RenderTargetUnavailable,
+    RenderTargetCreationFailed,
+    RenderTargetBeginFailed,
 };
 
 // A texture is owned by its SceneRenderer and remains valid until that renderer
@@ -34,6 +35,8 @@ struct SceneRenderResult final {
     std::string scene_name;
     uint32_t width;
     uint32_t height;
+    uint32_t color_space;
+    uint32_t color_format;
     gs_texture_t *texture;
 };
 

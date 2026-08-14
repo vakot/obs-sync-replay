@@ -206,7 +206,9 @@ that the source is an `obs_scene_t`, obtains its native `obs_source_get_width` a
 `obs_source_get_height`, and renders it with `obs_source_video_render` into its own
 `gs_texrender_t` target. The target uses the source's reported graphics color space
 and is recreated if that space changes; target dimensions are the source's native
-dimensions for that attempt. The target is created and destroyed only while the
+dimensions for that attempt. `gs_texrender_end` marks the target rendered, so each
+subsequent master-frame attempt resets its own target before beginning; this is a
+graphics-resource lifecycle operation, not a timing decision. The target is created and destroyed only while the
 graphics context is entered. Its texture is GPU-only and remains owned by the
 renderer until that renderer's next render or destruction; Phase 2 does not retain
 textures for encoding or buffering.
