@@ -7,15 +7,16 @@ does not change the production Phase 4 decision.
 
 ## Decision
 
-**YES, WITH CONSTRAINT.** Two independent selected scenes can use the native
-`obs_view_t -> video_t -> obs_encoder_t` path without weakening frame-boundary
-synchronization, provided that the plugin treats the OBS composition timestamp
-(CTS, in nanoseconds) as its `MasterPTS` and validates a per-packet CTS-to-master
-mapping.  It must not require the raw `encoder_packet.pts` integer to equal the
-nanosecond `MasterPTS` integer: libobs deliberately makes encoder PTS a value in
-the encoder timebase, beginning at zero for each activation.
+**YES, WITH A GRAPHICS-LAG BLOCKER.** Two independent selected scenes can use the
+native `obs_view_t -> video_t -> obs_encoder_t` path without weakening
+frame-boundary synchronization during the observed normal cadence, provided that
+the plugin treats the OBS composition timestamp (CTS, in nanoseconds) as its
+`MasterPTS` and validates a per-packet CTS-to-master mapping. It must not require
+the raw `encoder_packet.pts` integer to equal the nanosecond `MasterPTS` integer:
+libobs deliberately makes encoder PTS a value in the encoder timebase, beginning
+at zero for each activation.
 
-Thus the preserved invariant is:
+The target invariant remains:
 
 ```text
 A[N].master_frame_id == B[N].master_frame_id
@@ -23,11 +24,14 @@ A[N].cts_ns          == B[N].cts_ns == MasterPTS[N]
 A[N].encoder_pts     == B[N].encoder_pts
 ```
 
-`encoder_pts` is not a substitute clock.  It is a packet-local presentation value
-joined to the immutable master frame by CTS.  A later production replay record must
-store both `master_pts_ns` and native `encoder_pts`, and reject a packet that lacks
-or cannot be joined through CTS.  This preserves the stronger temporal guarantee;
-it does not perform offset correction or pair by callback order.
+`encoder_pts` is not a substitute clock. It is a packet-local presentation value
+joined to the immutable master frame by CTS. Equal A/B native PTS is presently a
+**normal-cadence experimental check**, not yet a proven invariant for every lagged
+slot. The two preserved NVENC anomalies require a paired missing/duplicated-slot
+model before this path can be accepted for production replay. A later production
+replay record must store both `master_pts_ns` and native `encoder_pts`, and reject
+or explicitly represent a packet that lacks an unambiguous CTS-to-master join. It
+must not use offset correction or callback order.
 
 ## Public API surface
 
@@ -151,6 +155,102 @@ joined to an accepted `MasterFrame`; it must not infer identity from the duplica
 count or callback order.  This branch's experiment logs that condition as an
 invariant 3 failure.
 
+## Graphics lag / duplicated-slot semantics
+
+The following source findings use the pinned OBS Studio 32.2.1 tree. The runtime
+evidence below is from the still-running NVENC research session; it was read from
+the portable log without restarting OBS.
+
+### PROVEN
+
+1. A late graphics iteration intentionally produces `obs_vframe_info.count > 1`.
+   `video_sleep` calculates the number of elapsed frame intervals, advances core
+   video time by that count, increments `lagged_frames` by `count - 1`, and queues
+   `{ timestamp = cur_time, count }` to every active mix
+   ([`libobs/obs-video.c:805-860`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L805-L860)).
+2. The **raw/software** path intentionally reuses the rendered image for each
+   count slot. `video_output_lock_frame` stores `count` and the initial timestamp;
+   its video thread invokes each input once per count and increments
+   `video_data.timestamp` by the configured frame interval after every invocation
+   ([`libobs/obs-video.c:777-795`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L777-L795),
+   [`libobs/media-io/video-io.c:126-214`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L126-L214)).
+   Thus a repeated image occupies consecutive CTS slots; `count > 1` does not by
+   itself assign one CTS to multiple repeated raw frames.
+3. The **GPU/texture** path intentionally duplicates its most recent texture when
+   a queued frame has `count > 1`. The GPU encode thread decrements `tf.count`,
+   increments `tf.timestamp` by its frame interval, and queues the texture again
+   until all slots have been emitted
+   ([`libobs/obs-video.c:442-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L515),
+   [`libobs/obs-video-gpu-encode.c:199-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L199-L210)).
+   Again, the intended repeated-image slots have consecutive CTS values.
+4. `encoder->cur_pts` advances once for each successful raw encode request and for
+   every texture encode iteration. It is independent of the composition timestamp
+   ([`libobs/obs-encoder.c:1623-1638`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1623-L1638),
+   [`libobs/obs-video-gpu-encode.c:154-194`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L154-L194)).
+5. For each encode request, libobs records an `encoder_packet_time` keyed by native
+   PTS with the supplied raw frame timestamp or texture timestamp as CTS. A packet
+   callback receives the timing record selected by exact native PTS match; it is not
+   selected by callback order
+   ([`libobs/obs-encoder.c:1417-1503`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1417-L1503),
+   [`libobs/obs-output.c:1716-1754`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L1716-L1754)).
+6. Each `obs_view_add` mix owns its raw/GPU queues and, for texture encoders, its
+   own GPU encode thread. An encoder group gives a common start timestamp; it does
+   not make later per-mix queue consumption or `cur_pts` advancement atomic across
+   two views.
+
+### INFERRED FROM THE PRESERVED NVENC LOG
+
+Two one-frame graphics-lag events produced the same shape:
+
+```text
+21:33:31.488  cadence discontinuity ... lagged_frames=13 master_frame_id=77465
+21:33:31.723  single CTS set for master_frame_id=77464: A PTS=77444, B PTS=77445
+21:33:31.764/781  additional B then A observations for CTS=80234874040704
+
+21:34:48.764  cadence discontinuity ... lagged_frames=14 master_frame_id=82101
+21:34:49.030  single CTS set for master_frame_id=82100: A PTS=82082, B PTS=82081
+21:34:49.034/054  additional A then B observations for CTS=80312157370946
+```
+
+Later sampled validations returned to the single-packet/equal-PTS normal-cadence
+shape, so this was not observed as accumulating drift. The anomaly CTS belongs to
+the master slot immediately before the logged cadence discontinuity. This is
+consistent with independent queue latency around the lag boundary, but it is not
+yet a proven causal explanation.
+
+### UNRESOLVED
+
+- The documented `count` paths advance CTS for each repeated slot, so they do not
+  alone explain multiple output callbacks with the **same** CTS. The next run must
+  capture every packet, its previous packet, and the complete per-CTS packet set to
+  determine whether the duplicate callback reflects separate encode requests,
+  output interleaving/timing association, or another queue boundary.
+- Whether x264 reproduces the same CTS/PTS shape under deliberate graphics lag is
+  untested. Its raw path is source-distinct from NVENC's texture path.
+- Public packet timing identifies CTS and native PTS, but does not expose an
+  explicit original-versus-duplicated-slot flag or the private `count` value.
+- Consequently, equal native encoder PTS is not yet proven as a universal A/B
+  invariant, and the current prototype cannot yet claim the product's strong
+  reconstruction guarantee under graphics lag.
+
+### Research instrumentation and production direction
+
+The experiment now retains a bounded raw packet set per CTS/master frame instead
+of treating a second observation as an immediate invariant failure. Every packet
+logs output, PTS, DTS, CTS, keyframe, matching master identity, per-CTS observation
+index, and previous per-output PTS/CTS at DEBUG level. A multiple-observation or
+single-packet PTS mismatch emits one structured record containing all observed A
+and B packets for that CTS. Timeline logs carry previous master PTS, configured
+interval, cadence delta, and lagged-frame count.
+
+This is instrumentation only: it does not pair by arrival order, repair PTS,
+rewrite CTS, fabricate MasterFrames, or silently discard extra packets. The
+recommended production direction is to model every canonical temporal slot
+explicitly and require both outputs to provide one unambiguous representation for
+that slot. Until source-plus-runtime evidence defines the repeated/missing-slot
+mapping, a lagged packet set must be retained as a diagnosed, unsupported condition
+rather than accepted as approximately synchronized.
+
 ## Source trace: `video_t` to `obs_encoder_t`
 
 ### PROVEN
@@ -175,9 +275,11 @@ invariant 3 failure.
    ([`libobs/obs-encoder.c:370-403`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L370-L403),
    [`libobs/obs-video.c:835-850`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L835-L850)).
 
-This explains the packet model: equal native encoder PTS is provable for group-started
-same-FPS outputs, but that PTS is a frame-timebase coordinate, not the absolute
-nanosecond composition time.  CTS is the authoritative join key to Phase 1.
+This explains the packet model: equal native encoder PTS was observed for
+group-started same-FPS outputs at normal cadence, but source does not make it an
+atomic cross-view guarantee after activation. It remains a frame-timebase coordinate,
+not the absolute nanosecond composition time. CTS is the authoritative join key to
+Phase 1.
 
 ## Hardware and software paths
 
@@ -215,16 +317,17 @@ Camera Test   -> obs_view B -> video_t B -> obs_encoder_t B -> null_output B
 
 It creates two views, fixes each to the configured scene source, adds both to the
 main render loop, attaches one normal registered video encoder to each returned
-`video_t`, and groups the video encoders before starting the outputs.  The packet
-callback validates the packet PTS/timing PTS identity, joins CTS to the recorded
-canonical master timestamp, and then validates both outputs for equal native PTS and
-CTS. It never pairs packets by arrival order. Its outputs can run only after the
+`video_t`, and groups the video encoders before starting the outputs. The packet
+callback validates the packet PTS/timing PTS identity and joins CTS to the recorded
+canonical master timestamp. It retains the complete bounded raw set before making
+the normal-cadence single-packet/equal-PTS observation; it never pairs packets by
+arrival order. Its outputs can run only after the
 explicit research activation described above. No custom NVENC code, file output,
 muxer, replay buffer, Replay Buffer frontend integration, or scene UI is included.
 
 ## Runtime evidence
 
-### x264 — PROVEN (10-minute live run)
+### x264 — PROVEN normal-cadence run (10 minutes)
 
 Portable OBS 32.2.1, configured at a 1920x1080 base, 1280x720 output, and 60 FPS,
 selected `obs_x264` for both outputs. The experiment started after scene collection
@@ -236,21 +339,20 @@ master_frame_id=600 master_pts=73228176489022 encoder_pts=539 ... validation=ok
 master_frame_id=900 master_pts=73233176488822 encoder_pts=839 ... validation=ok
 ```
 
-The run lasted 614 seconds, remained responsive, produced 122 sampled successful
-pair validations, and emitted zero explicit CTS/PTS association or pair-mismatch
-errors. The smaller encoder PTS is expected: activation begins after the master
-session and encoder PTS is in 1/60-second units.  For every logged completed pair,
-the callback verified both native PTS values and both CTS values matched the stored
-master frame. DTS was observed separately and is not a pairing key.
+The run lasted 614 seconds, remained responsive, and produced 122 sampled successful
+normal-cadence single-packet validations. The smaller encoder PTS is expected:
+activation begins after the master session and encoder PTS is in 1/60-second units.
+It was not a graphics-lag stress test and does not prove the unresolved lag model.
 
-### NVENC — PROVEN (10-minute live run)
+### NVENC — PROVEN normal-cadence run (10 minutes)
 
 The same 1280x720/60 output topology used `obs_nvenc_h264_tex` for both outputs.
-The run lasted 612 seconds, remained responsive, produced 122 sampled successful
-pair validations, and emitted zero explicit CTS/PTS association or pair-mismatch errors.
-No graphics-thread freeze or sustained rendering lag was observed. The native OBS
-GPU encode thread handled texture encoding; the prototype adds no custom encoder
-worker or graphics-thread wait.
+The run lasted 612 seconds, remained responsive, and produced 122 sampled successful
+normal-cadence single-packet validations. No graphics-thread freeze or sustained
+rendering lag was observed. The native OBS GPU encode thread handled texture
+encoding; the prototype adds no custom encoder worker or graphics-thread wait. The
+later preserved NVENC session described above did encounter two lag-boundary
+anomalies, so this earlier run is normal-cadence evidence only.
 
 ### Scene switching — PROVEN (manual NVENC exercise)
 
@@ -306,7 +408,11 @@ diagnostics, adapting downstream records to store native packet timebase metadat
 - Repeat Program switching between `Gameplay Test`, `Camera Test`, and `Combined
   Reference` as part of the future systematic switching/stress matrix.
 - Exercise graphics lag deliberately and prove the production missing-slot policy
-  rejects/unambiguously handles unjoinable CTS values.
+  handles every packet set unambiguously, including repeated/missing slots and
+  same-CTS multiple observations.
+- Run the new per-packet instrumentation through deliberate lag at 1920x1080/60
+  with both `obs_nvenc_h264_tex` and `obs_x264`; do not change the production
+  synchronization invariant until those raw packet sets explain the anomaly.
 - Confirm a supported production video-only output lifecycle, or document the
   smallest accepted OBS extension point, before treating the prototype's
   `null_output` activation detail as a production design.

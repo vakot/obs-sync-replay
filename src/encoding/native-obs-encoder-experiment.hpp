@@ -7,7 +7,7 @@
 #include <map>
 #include <mutex>
 #include <string>
-#include <unordered_map>
+#include <vector>
 
 struct encoder_packet;
 struct encoder_packet_time;
@@ -52,20 +52,26 @@ class NativeObsEncoderExperiment final {
     };
 
     struct PacketObservation final {
-        bool seen = false;
         int64_t packet_pts = 0;
         int64_t packet_dts = 0;
         bool keyframe = false;
         uint64_t cts = 0;
-    };
-
-    struct PacketPair final {
-        std::array<PacketObservation, 2> outputs{};
+        size_t observation_index = 0;
+        bool has_previous_packet = false;
+        int64_t previous_packet_pts = 0;
+        uint64_t previous_cts = 0;
     };
 
     struct CanonicalFrame final {
         MasterFrameId frame_id = 0;
         MasterFramePts pts_ns = 0;
+    };
+
+    struct PacketSet final {
+        CanonicalFrame canonical;
+        std::array<std::vector<PacketObservation>, 2> outputs{};
+        bool single_packet_validation_logged = false;
+        bool single_packet_validation_failed_logged = false;
     };
 
     static void PacketCallback(obs_output_t* output, struct encoder_packet* packet,
@@ -75,6 +81,8 @@ class NativeObsEncoderExperiment final {
 
     bool CreateView(Output output, const std::string& scene_name);
     bool CreateEncoderAndOutput(Output output);
+    void LogPacketSet(const PacketSet& packet_set, const char* reason) const;
+    void TrimObservationWindows();
     void ReleaseResources();
     std::string EncoderId() const;
     static const char* OutputName(Output output) noexcept;
@@ -91,8 +99,10 @@ class NativeObsEncoderExperiment final {
     obs_encoder_group_t* encoder_group_ = nullptr;
 
     std::mutex observations_mutex_;
-    std::unordered_map<MasterFramePts, CanonicalFrame> master_frames_by_pts_;
-    std::map<MasterFrameId, PacketPair> packet_pairs_;
+    std::map<MasterFramePts, CanonicalFrame> master_frames_by_pts_;
+    std::map<MasterFrameId, PacketSet> packet_sets_;
+    std::array<PacketObservation, 2> previous_packets_{};
+    std::array<bool, 2> has_previous_packets_{};
     bool running_ = false;
 };
 

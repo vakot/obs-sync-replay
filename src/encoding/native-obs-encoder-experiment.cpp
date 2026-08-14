@@ -3,6 +3,7 @@
 #include <obs-module.h>
 
 #include <cstdlib>
+#include <sstream>
 #include <utility>
 
 namespace obs_sync_replay {
@@ -12,6 +13,7 @@ namespace {
 constexpr char kNullOutputId[] = "null_output";
 constexpr char kDefaultEncoderId[] = "obs_x264";
 constexpr char kActivationAudioEncoderId[] = "ffmpeg_aac";
+constexpr size_t kObservationWindowCapacity = 4096;
 
 size_t OutputIndex(const NativeObsEncoderExperiment::Output output) {
     return output == NativeObsEncoderExperiment::Output::A ? 0 : 1;
@@ -100,6 +102,7 @@ void NativeObsEncoderExperiment::ObserveMasterFrame(const MasterFrame& frame) {
              static_cast<unsigned long long>(frame.frame_id()),
              static_cast<unsigned long long>(frame.pts_ns()));
     }
+    TrimObservationWindows();
 }
 
 void NativeObsEncoderExperiment::PacketCallback(obs_output_t*, struct encoder_packet* packet,
@@ -156,43 +159,114 @@ void NativeObsEncoderExperiment::ObservePacket(
         return;
     }
 
-    PacketPair& pair = packet_pairs_[master->second.frame_id];
-    PacketObservation& observation = pair.outputs[OutputIndex(output)];
-    if (observation.seen) {
-        blog(LOG_ERROR,
-             "[native-encoder-experiment] invariant=8 output=%s master_frame_id=%llu duplicate "
-             "packet observation",
-             OutputName(output), static_cast<unsigned long long>(master->second.frame_id));
+    PacketSet& packet_set =
+        packet_sets_.try_emplace(master->second.frame_id, PacketSet{master->second}).first->second;
+    const size_t output_index = OutputIndex(output);
+    std::vector<PacketObservation>& observations = packet_set.outputs[output_index];
+    const PacketObservation& previous = previous_packets_[output_index];
+    const PacketObservation observation{packet.pts,          packet.dts,
+                                        packet.keyframe,     packet_time->cts,
+                                        observations.size(), has_previous_packets_[output_index],
+                                        previous.packet_pts, previous.cts};
+    observations.push_back(observation);
+    previous_packets_[output_index] = observation;
+    has_previous_packets_[output_index] = true;
+
+    blog(LOG_DEBUG,
+         "[native-encoder-experiment] packet output=%s packet_pts=%lld packet_dts=%lld CTS=%llu "
+         "keyframe=%d master_frame_id=%llu master_pts=%llu observation_index=%llu "
+         "previous_packet_pts=%lld previous_cts=%llu has_previous=%d",
+         OutputName(output), static_cast<long long>(observation.packet_pts),
+         static_cast<long long>(observation.packet_dts),
+         static_cast<unsigned long long>(observation.cts), observation.keyframe ? 1 : 0,
+         static_cast<unsigned long long>(packet_set.canonical.frame_id),
+         static_cast<unsigned long long>(packet_set.canonical.pts_ns),
+         static_cast<unsigned long long>(observation.observation_index),
+         static_cast<long long>(observation.previous_packet_pts),
+         static_cast<unsigned long long>(observation.previous_cts),
+         observation.has_previous_packet ? 1 : 0);
+
+    const std::vector<PacketObservation>& a_packets = packet_set.outputs[0];
+    const std::vector<PacketObservation>& b_packets = packet_set.outputs[1];
+    if (a_packets.empty() || b_packets.empty()) {
+        if (observations.size() > 1) {
+            LogPacketSet(packet_set, "multiple_packet_observations_for_cts");
+        }
         return;
     }
 
-    observation = {true, packet.pts, packet.dts, packet.keyframe, packet_time->cts};
-    const PacketObservation& a = pair.outputs[0];
-    const PacketObservation& b = pair.outputs[1];
-    if (!a.seen || !b.seen) {
+    if (a_packets.size() != 1 || b_packets.size() != 1) {
+        LogPacketSet(packet_set, "packet_set_contains_multiple_observations");
         return;
     }
 
-    if (a.packet_pts != b.packet_pts || a.cts != b.cts || a.cts != master->second.pts_ns) {
-        blog(LOG_ERROR,
-             "[native-encoder-experiment] invariant=4 failed master_frame_id=%llu master_pts=%llu "
-             "a_pts=%lld b_pts=%lld a_cts=%llu b_cts=%llu",
-             static_cast<unsigned long long>(master->second.frame_id),
-             static_cast<unsigned long long>(master->second.pts_ns),
-             static_cast<long long>(a.packet_pts), static_cast<long long>(b.packet_pts),
-             static_cast<unsigned long long>(a.cts), static_cast<unsigned long long>(b.cts));
+    const PacketObservation& a = a_packets.front();
+    const PacketObservation& b = b_packets.front();
+    if (a.packet_pts != b.packet_pts || a.cts != b.cts || a.cts != packet_set.canonical.pts_ns) {
+        if (!packet_set.single_packet_validation_failed_logged) {
+            blog(
+                LOG_WARNING,
+                "[native-encoder-experiment] research single-packet CTS set needs investigation "
+                "master_frame_id=%llu master_pts=%llu a_pts=%lld b_pts=%lld a_cts=%llu b_cts=%llu; "
+                "raw observations retained",
+                static_cast<unsigned long long>(packet_set.canonical.frame_id),
+                static_cast<unsigned long long>(packet_set.canonical.pts_ns),
+                static_cast<long long>(a.packet_pts), static_cast<long long>(b.packet_pts),
+                static_cast<unsigned long long>(a.cts), static_cast<unsigned long long>(b.cts));
+            packet_set.single_packet_validation_failed_logged = true;
+        }
+        LogPacketSet(packet_set, "single_packet_pts_or_cts_mismatch");
         return;
     }
 
-    const bool sampled = master->second.frame_id < 3 || master->second.frame_id % 300 == 0;
+    if (packet_set.single_packet_validation_logged) {
+        return;
+    }
+
+    const bool sampled =
+        packet_set.canonical.frame_id < 3 || packet_set.canonical.frame_id % 300 == 0;
     blog(sampled ? LOG_INFO : LOG_DEBUG,
          "[native-encoder-experiment] master_frame_id=%llu master_pts=%llu encoder_pts=%lld "
-         "a_dts=%lld b_dts=%lld a_keyframe=%d b_keyframe=%d validation=ok",
-         static_cast<unsigned long long>(master->second.frame_id),
-         static_cast<unsigned long long>(master->second.pts_ns),
+         "a_dts=%lld b_dts=%lld a_keyframe=%d b_keyframe=%d single_packet_validation=ok",
+         static_cast<unsigned long long>(packet_set.canonical.frame_id),
+         static_cast<unsigned long long>(packet_set.canonical.pts_ns),
          static_cast<long long>(a.packet_pts), static_cast<long long>(a.packet_dts),
          static_cast<long long>(b.packet_dts), a.keyframe ? 1 : 0, b.keyframe ? 1 : 0);
-    packet_pairs_.erase(master->second.frame_id);
+    packet_set.single_packet_validation_logged = true;
+}
+
+void NativeObsEncoderExperiment::LogPacketSet(const PacketSet& packet_set,
+                                              const char* const reason) const {
+    std::ostringstream message;
+    message << "[native-encoder-experiment] research packet-set reason=" << reason
+            << " master_frame_id=" << packet_set.canonical.frame_id
+            << " master_pts=" << packet_set.canonical.pts_ns;
+
+    for (size_t output_index = 0; output_index < packet_set.outputs.size(); ++output_index) {
+        message << " output_" << OutputName(static_cast<Output>(output_index)) << "=[";
+        const std::vector<PacketObservation>& observations = packet_set.outputs[output_index];
+        for (size_t index = 0; index < observations.size(); ++index) {
+            const PacketObservation& observation = observations[index];
+            if (index != 0) {
+                message << ',';
+            }
+            message << "{index=" << observation.observation_index
+                    << " pts=" << observation.packet_pts << " dts=" << observation.packet_dts
+                    << " cts=" << observation.cts << " keyframe=" << (observation.keyframe ? 1 : 0)
+                    << '}';
+        }
+        message << ']';
+    }
+    blog(LOG_WARNING, "%s", message.str().c_str());
+}
+
+void NativeObsEncoderExperiment::TrimObservationWindows() {
+    while (master_frames_by_pts_.size() > kObservationWindowCapacity) {
+        master_frames_by_pts_.erase(master_frames_by_pts_.begin());
+    }
+    while (packet_sets_.size() > kObservationWindowCapacity) {
+        packet_sets_.erase(packet_sets_.begin());
+    }
 }
 
 bool NativeObsEncoderExperiment::CreateView(const Output output, const std::string& scene_name) {
@@ -372,7 +446,9 @@ void NativeObsEncoderExperiment::ReleaseResources() {
 
     std::lock_guard<std::mutex> lock(observations_mutex_);
     master_frames_by_pts_.clear();
-    packet_pairs_.clear();
+    packet_sets_.clear();
+    previous_packets_.fill({});
+    has_previous_packets_.fill(false);
 
     if (was_running) {
         blog(LOG_INFO, "[native-encoder-experiment] stop complete");
