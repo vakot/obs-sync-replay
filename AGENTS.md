@@ -121,10 +121,9 @@ and Merge policy.
 
 ## Engineering Conventions
 
-Place implementation under the module that owns the responsibility. Do not add
-unrelated files directly to `src/`; create a module directory only when adding real
-implementation for that subsystem. See [`docs/architecture.md`](docs/architecture.md)
-for the module layout and dependency direction.
+Organize meaningful components as `src/<module>/<component>/...` and retain explicit
+component filenames; do not use generic `index.*` files or create empty speculative
+component directories. See [`docs/architecture.md`](docs/architecture.md) for details.
 
 Follow [`docs/building.md`](docs/building.md) and repository formatter/static-analysis
 configuration once bootstrapped. Prefer modern, unsurprising C++ with:

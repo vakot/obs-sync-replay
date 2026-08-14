@@ -64,14 +64,29 @@ when implementation needs them.
 
 ## Module-Oriented Source Layout
 
-The source root is an internal include root. Code includes project headers by module,
-for example `#include "timeline/master-frame.hpp"`; relative upward paths and
-`src/...` includes are not used.
+The source root is an internal include root. Organization has two levels: module
+directories group subsystem responsibilities, and component directories group
+meaningful implementation units. For example:
 
-Current implementations live only in `src/plugin/` and `src/timeline/`, with their
-tests in `tests/timeline/`. `timeline/master-frame.hpp` owns the reusable immutable
-`MasterFrame`, `MasterFrameId`, and `MasterFramePts` domain types, so rendering and
-other consumers need not include the timeline state machine.
+```text
+timeline/
+`-- master-frame-coordinator/
+    |-- master-frame-coordinator.hpp
+    `-- master-frame-coordinator.cpp
+```
+
+Code includes project headers from that root, for example
+`#include "timeline/master-frame/master-frame.hpp"`; relative upward paths and
+`src/...` includes are not used. Component files retain their explicit component
+names—`index.hpp` and `index.cpp` are not used. The repetition is intentional: it
+makes search, compiler output, stack traces, and IDE navigation unambiguous even when
+the directory context is absent.
+
+Current implementations live in `src/plugin/` and component directories under
+`src/timeline/`, with tests mirroring the relevant component hierarchy under
+`tests/timeline/`. `timeline/master-frame/master-frame.hpp` owns the reusable
+immutable `MasterFrame`, `MasterFrameId`, and `MasterFramePts` domain types, so
+rendering and other consumers need not include the timeline state machine.
 
 The intended modules are:
 
@@ -86,8 +101,9 @@ The intended modules are:
 | `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
 | `ui` | OBS configuration and controls without synchronization logic |
 
-Only modules with real implementation receive directories; do not create empty
-future-module folders or placeholder headers. The intended dependency direction is
+Only modules and meaningful components with real implementation receive directories;
+do not create empty future-module/component folders or placeholder headers. The
+intended dependency direction is
 `plugin -> timeline -> rendering -> encoding -> replay/muxing`, while `validation`
 observes relevant domains and `ui` acts as a configuration/control layer. In
 particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but

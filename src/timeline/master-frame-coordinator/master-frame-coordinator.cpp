@@ -1,4 +1,4 @@
-#include "timeline/master-frame-coordinator.hpp"
+#include "timeline/master-frame-coordinator/master-frame-coordinator.hpp"
 
 #include <obs-module.h>
 

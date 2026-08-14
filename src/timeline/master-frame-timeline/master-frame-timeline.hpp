@@ -1,6 +1,6 @@
 #pragma once
 
-#include "timeline/master-frame.hpp"
+#include "timeline/master-frame/master-frame.hpp"
 
 #include <optional>
 
