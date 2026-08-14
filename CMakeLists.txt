@@ -15,13 +15,20 @@ add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.c
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(obs-sync-replay-rendering-coordination STATIC src/rendering/scene-render-pair-tracker.cpp)
+target_link_libraries(obs-sync-replay-rendering-coordination PUBLIC obs-sync-replay-timeline)
+target_compile_features(obs-sync-replay-rendering-coordination PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-rendering-coordination PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 add_library(
   obs-sync-replay
   MODULE
   src/plugin/plugin-main.cpp
   src/timeline/master-frame-coordinator.cpp
+  src/rendering/scene-renderer.cpp
+  src/rendering/synchronized-scene-renderer.cpp
 )
-target_link_libraries(obs-sync-replay PRIVATE OBS::libobs obs-sync-replay-timeline)
+target_link_libraries(obs-sync-replay PRIVATE OBS::libobs obs-sync-replay-rendering-coordination)
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
 target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -55,6 +62,17 @@ if(MSVC)
   target_compile_options(master-frame-timeline-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME master-frame-timeline COMMAND master-frame-timeline-test)
+
+add_executable(
+  synchronized-scene-renderer-test
+  tests/rendering/synchronized-scene-renderer-test.cpp
+)
+target_link_libraries(synchronized-scene-renderer-test PRIVATE obs-sync-replay-rendering-coordination)
+target_compile_features(synchronized-scene-renderer-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-scene-renderer-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-scene-renderer COMMAND synchronized-scene-renderer-test)
 
 add_test(
   NAME plugin-artifact
