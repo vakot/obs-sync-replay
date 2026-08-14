@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 
 namespace obs_sync_replay {
 
@@ -16,7 +17,8 @@ class NvencVideoEncoder final : public VideoEncoder {
     using FailureCallback = std::function<void(const MasterFrame&, const std::string&)>;
 
     NvencVideoEncoder(OutputSlot output, PacketCallback packet_callback,
-                      FailureCallback failure_callback);
+                      FailureCallback failure_callback,
+                      std::shared_ptr<std::recursive_mutex> operation_gate);
     ~NvencVideoEncoder() override;
 
     VideoEncoderSubmitResult Prepare(const RetainedGpuFrame& frame) override;
@@ -40,6 +42,7 @@ class NvencVideoEncoder final : public VideoEncoder {
     OutputSlot output_;
     PacketCallback packet_callback_;
     FailureCallback failure_callback_;
+    std::shared_ptr<std::recursive_mutex> operation_gate_;
     std::string last_error_;
 };
 

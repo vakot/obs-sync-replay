@@ -33,6 +33,7 @@ class SynchronizedVideoEncoder final {
     void OnEncoderFailure(const MasterFrame& master_frame, const std::string& detail);
     void Fail(const MasterFrame& master_frame, const char* reason, const char* detail) noexcept;
 
+    std::shared_ptr<std::recursive_mutex> operation_gate_{std::make_shared<std::recursive_mutex>()};
     std::unique_ptr<VideoEncoder> encoder_a_;
     std::unique_ptr<VideoEncoder> encoder_b_;
     EncodedPacketTracker packet_tracker_{6};

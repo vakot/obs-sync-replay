@@ -20,10 +20,10 @@ bool IsSampled(const MasterFrame& master_frame) noexcept {
 SynchronizedVideoEncoder::SynchronizedVideoEncoder()
     : encoder_a_(std::make_unique<NvencVideoEncoder>(
           OutputSlot::A, [this](EncodedVideoPacket&& packet) { OnEncoderPacket(std::move(packet)); },
-          [this](const MasterFrame& frame, const std::string& detail) { OnEncoderFailure(frame, detail); })),
+          [this](const MasterFrame& frame, const std::string& detail) { OnEncoderFailure(frame, detail); }, operation_gate_)),
       encoder_b_(std::make_unique<NvencVideoEncoder>(
           OutputSlot::B, [this](EncodedVideoPacket&& packet) { OnEncoderPacket(std::move(packet)); },
-          [this](const MasterFrame& frame, const std::string& detail) { OnEncoderFailure(frame, detail); })) {}
+          [this](const MasterFrame& frame, const std::string& detail) { OnEncoderFailure(frame, detail); }, operation_gate_)) {}
 
 SynchronizedVideoEncoder::~SynchronizedVideoEncoder() {
     Stop();
@@ -72,6 +72,15 @@ bool SynchronizedVideoEncoder::SubmitPair(const SynchronizedFramePair& pair) {
     if (!encoder_pts) {
         Fail(master_frame, "timestamp-overflow", "master PTS cannot fit the NVENC timestamp type");
         return false;
+    }
+    std::unique_lock<std::recursive_mutex> operation_lock(*operation_gate_, std::try_to_lock);
+    if (!operation_lock.owns_lock()) {
+        blog(LOG_WARNING,
+             "[sync-encode] invariant=8,9 master_frame_id=%llu master_pts=%llu status=dropped "
+             "reason=nvenc-operation-gate; complete A/B pair was not submitted",
+             static_cast<unsigned long long>(master_frame.frame_id()),
+             static_cast<unsigned long long>(master_frame.pts_ns()));
+        return true;
     }
     const VideoEncoderSubmitResult prepare_a = encoder_a_->Prepare(pair.output_a());
     const VideoEncoderSubmitResult prepare_b = encoder_b_->Prepare(pair.output_b());

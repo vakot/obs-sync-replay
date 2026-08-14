@@ -357,9 +357,11 @@ encoder failure, not an implicit color conversion or shifted frame.
 Each output owns a bounded ring of six persistent typed RGBA D3D11 input textures,
 NVENC registrations, bitstream buffers, and Windows completion events. They are
 created and registered once during graphics-context initialization and reused only
-after their own asynchronous completion has been copied and unmapped. The bounded ring
-is also the resource-lifetime authority: no slot is reused while NVENC still owns its
-mapped input or output bitstream.
+after their own asynchronous completion has been copied and unmapped. A slot has the
+explicit lifecycle `Free -> Reserved -> Submitted -> Completed -> Free`; its master
+identity, mapped resource, and completion event belong to that one lifecycle. The
+bounded ring is the resource-lifetime authority: no slot is reused while NVENC still
+owns its mapped input or output bitstream.
 
 The graphics tick copies a retained typeless `GS_RGBA` texture into a reserved typed
 ring texture with `CopyResource`, maps it, and makes the non-blocking
@@ -371,7 +373,7 @@ submission without a frame-count or wall-clock lifetime assumption.
 
 NVENC runs with `enableEncodeAsync = 1`. Each output has a completion worker that
 waits for its registered events in that output's submission order, uses
-`nvEncLockBitstream(doNotWait = 1)` only after the event signals, copies packet bytes,
+`nvEncLockBitstream(doNotWait = 0)` only after the event signals, copies packet bytes,
 then unlocks and unmaps the slot. Workers never call `gs_*` or use OBS's immediate D3D
 context. The only D3D immediate-context operation is the graphics-thread handoff copy.
 This follows the NVIDIA asynchronous Windows model while respecting libobs graphics
@@ -380,6 +382,25 @@ ownership; the worker's NVENC output retrieval is separate from OBS rendering. S
 and OBS 32.2.1's
 [`d3d11_encode`](https://github.com/obsproject/obs-studio/blob/32.2.1/plugins/obs-nvenc/nvenc-d3d11.c)
 for the researched API and texture-encoder boundaries.
+
+For DirectX sessions, NVENC warns that worker-side bitstream lock/unlock can internally
+use the application's D3D device. Therefore the implementation has one shared NVENC/D3D
+operation gate across both sessions. The graphics thread acquires it with `try_lock`
+for the complete paired preflight/copy/map/submit operation. If output retrieval owns
+the gate, the entire A/B master frame is explicitly dropped; the graphics tick never
+waits for that gate, an event, capacity, or hardware completion. The worker waits for
+its completion event without the gate, then serializes lock, unlock, and unmap through
+the gate. This prevents concurrent DirectX/NVENC driver calls, avoids cyclic lock
+ordering, and preserves the shared timeline by rejecting a pair atomically rather than
+submitting only one output.
+
+Each slot keeps an atomic last-operation marker for the before/after graphics copy,
+map, and submit calls, and for event wait, bitstream lock/unlock, unmap, and release
+on the completion worker. Sampled `sync-nvenc` begin/end diagnostics and a 10 ms
+operation warning limit normal log volume. If no graphics-side preparation occurs for
+one second, a worker watchdog emits every slot's output, lifecycle state, master frame,
+and last operation, making a graphics stall distinguishable from an event or NVENC API
+stall.
 
 The source unit is the canonical nanosecond PTS from `obs_get_video_frame_time()`.
 The encoder timebase is fixed at `1/1,000,000,000`, so the checked conversion is exact:
@@ -403,10 +424,13 @@ accepted, the session halts rather than allowing later work to conceal the parti
 operation. Packet association capacity is six complete pairs and completion order is
 never temporal authority. Sampled `[sync-encode]` logs record submitted/encoded
 identities, while full-ring drops and asynchronous completion failures name invariants
-7, 8, and 9. Shutdown first drains completion workers outside the graphics context,
-then unmaps, unregisters, and destroys their persistent NVENC resources. Phase 5
-begins only with synchronized rolling packet history; muxing, audio, and file saving
-remain outside this phase.
+7, 8, and 9. Shutdown signals each completion worker's explicit stop event before
+joining it, so the worker never remains indefinitely blocked in an NVENC completion
+wait. Teardown then takes the same operation gate before unmapping, unregistering, and
+destroying persistent NVENC resources; an interrupted completion is logged as an
+aborted shutdown operation and cannot leave a worker accessing a destroyed session.
+Phase 5 begins only with synchronized rolling packet history; muxing, audio, and file
+saving remain outside this phase.
 
 ## Replay Save Contract
 
