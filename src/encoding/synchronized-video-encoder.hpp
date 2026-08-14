@@ -5,12 +5,13 @@
 #include "pipeline/synchronized-frame-pipeline.hpp"
 
 #include <memory>
+#include <atomic>
+#include <mutex>
 
 namespace obs_sync_replay {
 
-// Consumes the one complete-pair FIFO while OBS graphics is entered. A failed
-// half-submission transitions the encoder session to Failed; it does not let a
-// subsequent B frame fill the missing slot or advance either output silently.
+// Submits complete pairs while OBS graphics is entered. NVENC completion runs
+// on encoder-owned threads and records packets by submitted identity.
 class SynchronizedVideoEncoder final {
   public:
     SynchronizedVideoEncoder();
@@ -28,13 +29,16 @@ class SynchronizedVideoEncoder final {
   private:
     bool SubmitPair(const SynchronizedFramePair& pair);
     bool RecordPacket(const EncodedVideoPacket& packet);
+    void OnEncoderPacket(EncodedVideoPacket&& packet);
+    void OnEncoderFailure(const MasterFrame& master_frame, const std::string& detail);
     void Fail(const MasterFrame& master_frame, const char* reason, const char* detail) noexcept;
 
     std::unique_ptr<VideoEncoder> encoder_a_;
     std::unique_ptr<VideoEncoder> encoder_b_;
-    EncodedPacketTracker packet_tracker_{4};
-    bool stopped_ = false;
-    bool failed_ = false;
+    EncodedPacketTracker packet_tracker_{6};
+    mutable std::mutex state_mutex_;
+    std::atomic<bool> stopped_{false};
+    std::atomic<bool> failed_{false};
 };
 
 } // namespace obs_sync_replay
