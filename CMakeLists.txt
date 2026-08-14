@@ -30,6 +30,29 @@ target_link_libraries(obs-sync-replay-pipeline PUBLIC obs-sync-replay-timeline P
 target_compile_features(obs-sync-replay-pipeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-pipeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+find_path(
+  OBS_SYNC_REPLAY_NVENC_INCLUDE_DIR
+  NAMES ffnvcodec/nvEncodeAPI.h
+  PATHS "${_obs_deps_dir}/include"
+  REQUIRED
+)
+
+add_library(
+  obs-sync-replay-encoding
+  STATIC
+  src/encoding/encoder-timestamp.cpp
+  src/encoding/encoded-packet-tracker.cpp
+  src/encoding/nvenc-video-encoder.cpp
+  src/encoding/synchronized-video-encoder.cpp
+)
+target_link_libraries(obs-sync-replay-encoding PUBLIC obs-sync-replay-pipeline PRIVATE OBS::libobs d3d11)
+target_compile_features(obs-sync-replay-encoding PUBLIC cxx_std_17)
+target_include_directories(
+  obs-sync-replay-encoding
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  PRIVATE "${OBS_SYNC_REPLAY_NVENC_INCLUDE_DIR}"
+)
+
 add_library(
   obs-sync-replay
   MODULE
@@ -40,7 +63,7 @@ add_library(
 )
 target_link_libraries(
   obs-sync-replay
-  PRIVATE OBS::libobs obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
+  PRIVATE OBS::libobs obs-sync-replay-rendering-coordination obs-sync-replay-pipeline obs-sync-replay-encoding
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
@@ -49,6 +72,7 @@ target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/
 if(MSVC)
   target_compile_options(obs-sync-replay-timeline PRIVATE /W4 /permissive- /Zc:__cplusplus)
   target_compile_options(obs-sync-replay-pipeline PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  target_compile_options(obs-sync-replay-encoding PRIVATE /W4 /permissive- /Zc:__cplusplus)
   target_compile_options(
     obs-sync-replay
     PRIVATE /W4 /permissive- /Zc:__cplusplus
@@ -98,6 +122,20 @@ if(MSVC)
   target_compile_options(synchronized-frame-queue-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME synchronized-frame-queue COMMAND synchronized-frame-queue-test)
+
+add_executable(
+  synchronized-video-encoder-test
+  tests/encoding/synchronized-video-encoder-test.cpp
+)
+target_link_libraries(
+  synchronized-video-encoder-test
+  PRIVATE obs-sync-replay-encoding obs-sync-replay-timeline
+)
+target_compile_features(synchronized-video-encoder-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-video-encoder-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-video-encoder COMMAND synchronized-video-encoder-test)
 
 add_test(
   NAME plugin-artifact

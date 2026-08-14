@@ -68,6 +68,10 @@ void SynchronizedSceneRenderer::Render(const MasterFrame& master_frame) {
     RecordAndLog(output_a);
     RecordAndLog(output_b);
     CaptureAndLog(output_a, output_b);
+    // TakeNext transfers the complete pair only while graphics is entered.
+    // NVENC's blocking bitstream lock finishes texture consumption before the
+    // moved pair is destroyed at the end of this call.
+    video_encoder_.Consume(pipeline_);
     obs_leave_graphics();
 
     if (!pair_tracker_.IsComplete()) {
@@ -89,6 +93,7 @@ void SynchronizedSceneRenderer::Stop() {
     stopped_ = true;
     pair_tracker_.Reset();
     obs_enter_graphics();
+    video_encoder_.Stop();
     pipeline_.Reset();
     scene_a_renderer_.DestroyRenderTarget();
     scene_b_renderer_.DestroyRenderTarget();

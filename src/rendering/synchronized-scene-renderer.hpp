@@ -1,5 +1,6 @@
 #pragma once
 
+#include "encoding/synchronized-video-encoder.hpp"
 #include "pipeline/synchronized-frame-pipeline.hpp"
 #include "rendering/scene-render-pair-tracker.hpp"
 
@@ -30,6 +31,7 @@ class SynchronizedSceneRenderer final {
     SceneRenderer scene_b_renderer_;
     SceneRenderPairTracker pair_tracker_;
     SynchronizedFramePipeline pipeline_{4};
+    SynchronizedVideoEncoder video_encoder_;
     std::array<std::optional<SceneRenderStatus>, 2> last_reported_status_;
     std::optional<SynchronizedFramePipelineResult> last_reported_pipeline_result_;
     bool stopped_ = false;
