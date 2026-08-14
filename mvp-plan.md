@@ -449,51 +449,23 @@ Do not silently save a replay reported as synchronized if validation failed.
 
 ---
 
-# 12. Minimal UI
+# 12. OBS-Native UX Direction
 
-Add a small dock/settings panel.
+An earlier MVP sketch proposed a dock, plugin-owned scene selectors, duplicate output
+settings, and a separate save hotkey. It is not the target shipped UX and must not
+drive new UI work.
 
-Example:
+The final integration should be invisible: the active OBS profile, scene collection,
+Replay Buffer controls, and Replay Buffer hotkeys are the user-facing source of truth.
+The plugin must not add a settings page, dock, custom selector, duplicate encoder or
+duration settings, buttons, or hotkeys. See
+[`docs/architecture.md`](docs/architecture.md#obs-native-product-integration-target)
+for the target model and the required OBS 32.2.1 frontend API research gate.
 
-```text
-Synchronized Replay
-────────────────────────────
-
-Scene A
-[ Gameplay              ▼ ]
-
-Scene B
-[ Webcam                ▼ ]
-
-Replay Duration
-[ 90 ] seconds
-
-Encoder
-[ NVIDIA NVENC H.264    ▼ ]
-
-Output Directory
-[ D:\OBS\Replays        ]
-
-Filename A
-[ gameplay ]
-
-Filename B
-[ webcam ]
-
-[ Start Replay Buffer ]
-[ Stop Replay Buffer  ]
-
-Status:
-● Running
-```
-
-Register an OBS hotkey:
-
-```text
-Save Synchronized Replay
-```
-
-No complex UI is necessary for the MVP.
+Current Phase 1--4 A/B values are intentional development wiring for proving the
+synchronization contract. A later phase will generalize those explicit outputs to
+Program plus top-level scenes and separately integrate the native Replay Buffer UX;
+neither change is part of the current implementation phase.
 
 ---
 

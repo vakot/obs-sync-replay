@@ -44,6 +44,63 @@ outputs must preserve the tick's identity and PTS. The plugin synchronizes its
 projections of OBS scene state; it does not claim to align device-internal capture
 instants.
 
+## OBS-Native Product Integration Target
+
+The current Phase 1--4 implementation deliberately has explicit A/B development
+outputs. That is not the intended final user experience. The shipped plugin should
+have no visible plugin-owned replay surface: no settings page, dock, custom scene
+selector, duplicate encoder or duration settings, plugin buttons, or plugin hotkeys.
+Users should work through the ordinary OBS UI, settings, profiles, scene collections,
+Replay Buffer controls, and Replay Buffer hotkeys.
+
+> The active OBS profile, scene collection, Replay Buffer controls, and Replay Buffer hotkeys are intended to remain the single user-facing source of configuration and interaction. obs-sync-replay should extend this workflow transparently rather than introduce a parallel replay interface.
+
+Where OBS exposes the needed state safely, the active configuration is the source of
+truth. A later integration derives encoder choice, quality and rate-control settings,
+preset, profile, keyframe interval, replay duration, output directory, filename
+behavior, video settings, and other relevant output settings from that active OBS
+configuration. It must not introduce a second persistent configuration that can drift
+from the selected OBS profile or scene collection. Supported lifecycle/configuration
+events must eventually update the synchronized engine when a profile or relevant OBS
+setting changes; the exact event-to-engine mapping is future research, not an
+assumption made by the current implementation.
+
+The final output model is dynamic but intentionally not generalized now:
+
+```text
+Program + each top-level scene in the active scene collection
+```
+
+`Program` is a distinct output that includes normal scene switches and transitions.
+For example, a Program sequence `Gameplay -> Camera -> Gameplay` produces the same
+saved master-frame range for Program, Gameplay, and Camera streams. Nested scene
+sources do not automatically become output streams. A future phase may replace the
+current fixed A/B wiring with that model; Phases 1--4 remain exactly two explicit
+outputs so their synchronization behavior stays narrow and testable.
+
+Replay interaction likewise belongs to OBS. A standard Start Replay Buffer, Stop
+Replay Buffer, or Save Replay Buffer action/hotkey should operate the synchronized
+engine without giving users a second workflow. The desired architecture is a vanilla
+OBS frontend interaction feeding the plugin engine, not the synchronized engine plus
+a concurrent vanilla replay encoder/storage pipeline.
+
+> The plugin should not run the vanilla OBS replay encoding pipeline in parallel when equivalent Program output is already produced by the synchronized replay engine, unless OBS integration constraints make this unavoidable.
+
+The preceding parallel-pipeline rule is a target architecture, pending frontend API
+research; it is not an established claim that the current public OBS API can provide
+the necessary interception.
+
+### Required Frontend Integration Research Gate
+
+Before implementing replay lifecycle integration, research OBS Studio 32.2.1 public
+frontend APIs and relevant internals to determine whether Start, Stop, Save, and their
+hotkeys can safely be reused or intercepted before vanilla OBS performs its own replay
+action. Public APIs are preferred. A `Replay Buffer Saved` notification is too late to
+control the capture/save operation. If public APIs are insufficient, document the
+minimum safe integration point and its lifecycle/upgrade risks before proposing a
+fallback. This document makes no commitment to Qt hooks, private frontend APIs, or a
+parallel vanilla pipeline.
+
 ## Conceptual Components
 
 Keep components separate by responsibility, but introduce concrete directories only
@@ -52,8 +109,8 @@ when implementation needs them.
 | Component | Responsibility | Must not do |
 | --- | --- | --- |
 | Plugin module | OBS lifecycle, registration, and top-level wiring | Own a second timing path |
-| Configuration | Validate two scenes, duration, output path, encoder settings, and names | Mutate active synchronization state without a defined transition |
-| Scene selection | Hold safe OBS references to selected scenes | Guess libobs ownership or lifetime |
+| Configuration | Current MVP: validate explicit A/B development values. Target: derive supported state from the active OBS configuration through defined transitions | Create a duplicate persistent plugin configuration |
+| Scene selection | Current MVP: hold safe A/B scene references. Target: project Program and top-level scene-collection scenes | Guess libobs ownership or lifetime or promote nested scenes automatically |
 | Master frame coordinator | Produce the sole `master_frame_id` and PTS sequence; dispatch both renders | Read encoder completion time as a clock |
 | Scene render targets A/B | Render each selected scene for the supplied master tick | Generate timestamps independently |
 | Encoders A/B | Encode their render target while preserving submitted identity/PTS | Pair frames by completion order |
@@ -121,7 +178,7 @@ The intended modules are:
 | `replay` | One synchronized replay buffer, common ranges, and packet retention |
 | `muxing` | MKV outputs, common replay boundaries, and paired output naming |
 | `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
-| `ui` | OBS configuration and controls without synchronization logic |
+| `ui` | Future OBS-native frontend integration without synchronization logic or a parallel plugin UI |
 
 Future modules follow the same flat-within-module convention, for example:
 
@@ -143,7 +200,8 @@ The intended dependency direction is
 `plugin -> timeline -> rendering -> pipeline -> encoding -> replay/muxing`, while `validation`
 observes relevant domains and `ui` acts as a configuration/control layer. In
 particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but
-`timeline` must not depend on rendering, encoding, replay, muxing, or UI.
+`timeline` must not depend on rendering, encoding, replay, muxing, or UI. The future
+`ui` layer is an adapter to native OBS surfaces, not a separate product interface.
 
 ## Frame Lifecycle
 
@@ -402,9 +460,12 @@ of temporal identity may not be.
 
 ## Scope and Evolution
 
-The MVP has exactly two outputs at one FPS. Prefer clear A/B types or a fixed-size
-two-output representation over a speculative arbitrary-output framework. New
-abstractions are justified only by current behavior, testing, ownership, or safety.
+Phases 1--4 have exactly two outputs at one FPS. Prefer clear A/B types or a
+fixed-size two-output representation over a speculative arbitrary-output framework.
+The later Program-plus-top-level-scenes model and native Replay Buffer integration are
+separate phases; neither authorizes generalizing the current encoder, rendering, or
+configuration code early. New abstractions are justified only by current behavior,
+testing, ownership, or safety.
 
 Any proposal for an independently advancing timeline, per-output replay range, or
 post-hoc synchronization is an architectural change that conflicts with the current
