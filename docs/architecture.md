@@ -62,6 +62,37 @@ when implementation needs them.
 | Validation | Check range, frame/slot counts, identities, PTS, and declared missing-slot policy | Downgrade drift to a warning and call the pair synchronized |
 | Logging | Emit joinable lifecycle, queue, missing-slot, range, and validation events | Report only generic success/failure text |
 
+## Module-Oriented Source Layout
+
+The source root is an internal include root. Code includes project headers by module,
+for example `#include "timeline/master-frame.hpp"`; relative upward paths and
+`src/...` includes are not used.
+
+Current implementations live only in `src/plugin/` and `src/timeline/`, with their
+tests in `tests/timeline/`. `timeline/master-frame.hpp` owns the reusable immutable
+`MasterFrame`, `MasterFrameId`, and `MasterFramePts` domain types, so rendering and
+other consumers need not include the timeline state machine.
+
+The intended modules are:
+
+| Module | Responsibility |
+| --- | --- |
+| `plugin` | OBS module lifecycle and top-level composition; never a timing-logic dumping ground |
+| `timeline` | Canonical frame identity, PTS, OBS timing observation, and master timeline lifecycle |
+| `rendering` | Selected-scene render targets associated with an existing `MasterFrame` |
+| `encoding` | Encoder ownership and packet association with submitted master identity |
+| `replay` | One synchronized replay buffer, common ranges, and packet retention |
+| `muxing` | MKV outputs, common replay boundaries, and paired output naming |
+| `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
+| `ui` | OBS configuration and controls without synchronization logic |
+
+Only modules with real implementation receive directories; do not create empty
+future-module folders or placeholder headers. The intended dependency direction is
+`plugin -> timeline -> rendering -> encoding -> replay/muxing`, while `validation`
+observes relevant domains and `ui` acts as a configuration/control layer. In
+particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but
+`timeline` must not depend on rendering, encoding, replay, muxing, or UI.
+
 ## Frame Lifecycle
 
 1. The coordinator accepts or generates the next master tick.

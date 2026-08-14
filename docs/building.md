@@ -160,8 +160,8 @@ Studio user file. The run script uses the configured executable directly and pas
 Repository rules are in `.clang-format`, `.clang-tidy`, and `.editorconfig`.
 
 ```powershell
-clang-format --dry-run --Werror src/plugin-main.cpp
-clang-format -i src/plugin-main.cpp
+clang-format --dry-run --Werror src/plugin/plugin-main.cpp
+clang-format -i src/plugin/plugin-main.cpp
 cmake --preset windows-debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy
 cmake --build --preset windows-debug
 ```

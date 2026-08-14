@@ -1,6 +1,6 @@
 #include <obs-module.h>
 
-#include "master-frame-coordinator.hpp"
+#include "timeline/master-frame-coordinator.hpp"
 
 #include <memory>
 

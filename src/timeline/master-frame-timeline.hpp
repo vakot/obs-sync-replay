@@ -1,31 +1,10 @@
 #pragma once
 
-#include <cstdint>
+#include "timeline/master-frame.hpp"
+
 #include <optional>
 
 namespace obs_sync_replay {
-
-using MasterFrameId = uint64_t;
-using MasterFramePts = uint64_t;
-
-namespace detail {
-class MasterFrameTimeline;
-}
-
-// Immutable temporal identity issued only by MasterFrameTimeline.
-class MasterFrame final {
-public:
-    MasterFrameId frame_id() const noexcept;
-    MasterFramePts pts_ns() const noexcept;
-
-private:
-    friend class detail::MasterFrameTimeline;
-
-    MasterFrame(MasterFrameId frame_id, MasterFramePts pts_ns) noexcept;
-
-    MasterFrameId frame_id_;
-    MasterFramePts pts_ns_;
-};
 
 enum class MasterFrameObservationResult {
     Accepted,

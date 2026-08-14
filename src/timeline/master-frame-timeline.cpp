@@ -1,19 +1,8 @@
-#include "master-frame-timeline.hpp"
+#include "timeline/master-frame-timeline.hpp"
 
 #include <limits>
 
 namespace obs_sync_replay {
-
-MasterFrame::MasterFrame(const MasterFrameId frame_id, const MasterFramePts pts_ns) noexcept
-    : frame_id_(frame_id), pts_ns_(pts_ns) {}
-
-MasterFrameId MasterFrame::frame_id() const noexcept {
-    return frame_id_;
-}
-
-MasterFramePts MasterFrame::pts_ns() const noexcept {
-    return pts_ns_;
-}
 
 namespace detail {
 
