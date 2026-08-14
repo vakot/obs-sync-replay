@@ -37,6 +37,8 @@ bool NativeObsEncoderExperiment::Start() {
     }
 
     encoder_id_ = EncoderId();
+    blog(LOG_INFO, "[native-encoder-experiment] explicitly activated encoder_id=%s",
+         encoder_id_.c_str());
     if (!CreateView(Output::A, scene_a_name_) || !CreateView(Output::B, scene_b_name_)) {
         ReleaseResources();
         return false;
@@ -84,13 +86,6 @@ void NativeObsEncoderExperiment::Stop() {
 }
 
 void NativeObsEncoderExperiment::ObserveMasterFrame(const MasterFrame& frame) {
-    if (!running_ && frame.frame_id() >= next_start_attempt_frame_id_) {
-        // Scene collections load after module load. Retry on the already
-        // canonical graphics cadence instead of creating a second timer.
-        next_start_attempt_frame_id_ = frame.frame_id() + 60;
-        Start();
-    }
-
     std::lock_guard<std::mutex> lock(observations_mutex_);
     if (!running_) {
         return;
@@ -276,8 +271,10 @@ bool NativeObsEncoderExperiment::CreateEncoderAndOutput(const Output output) {
 }
 
 void NativeObsEncoderExperiment::ReleaseResources() {
+    bool was_running = false;
     {
         std::lock_guard<std::mutex> lock(observations_mutex_);
+        was_running = running_;
         running_ = false;
     }
 
@@ -318,6 +315,10 @@ void NativeObsEncoderExperiment::ReleaseResources() {
     std::lock_guard<std::mutex> lock(observations_mutex_);
     master_frames_by_pts_.clear();
     packet_pairs_.clear();
+
+    if (was_running) {
+        blog(LOG_INFO, "[native-encoder-experiment] stopped");
+    }
 }
 
 std::string NativeObsEncoderExperiment::EncoderId() const {

@@ -38,8 +38,9 @@ class NativeObsEncoderExperiment final {
     bool Start();
     void Stop();
 
-    // Called by the existing MasterFrameCoordinator on the OBS graphics thread.
-    // Packet callbacks use this table to prove CTS-to-master association.
+    // Called by the existing MasterFrameCoordinator on the OBS graphics thread
+    // while the explicitly activated experiment is running. Packet callbacks use
+    // this table to prove CTS-to-master association.
     void ObserveMasterFrame(const MasterFrame& frame);
 
     enum class Output : uint8_t { A = 0, B = 1 };
@@ -92,7 +93,6 @@ class NativeObsEncoderExperiment final {
     std::mutex observations_mutex_;
     std::unordered_map<MasterFramePts, CanonicalFrame> master_frames_by_pts_;
     std::map<MasterFrameId, PacketPair> packet_pairs_;
-    MasterFrameId next_start_attempt_frame_id_ = 0;
     bool running_ = false;
 };
 

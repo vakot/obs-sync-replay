@@ -39,6 +39,7 @@ plugin compiled against the pinned SDK:
 | `obs_view_create`, `obs_view_set_source`, `obs_view_add`, `obs_view_add2`, `obs_view_remove`, `obs_view_destroy` | Create an independent view, select its scene source, make it an additional core video mix, and remove it. |
 | `obs_video_encoder_create`, `obs_encoder_set_video`, `obs_encoder_set_group`, `obs_encoder_group_create/destroy` | Create standard registered encoders, attach each to its own `video_t`, and synchronize activation. |
 | `obs_output_create`, `obs_output_set_video_encoder`, `obs_output_start/stop`, `obs_output_add_packet_callback` | Use a normal OBS output to own the non-public encoder start/stop work and observe packets. |
+| `obs_frontend_add_event_callback` / `obs_frontend_remove_event_callback` | Observe `OBS_FRONTEND_EVENT_FINISHED_LOADING` for the opt-in research activation only; this is not Replay Buffer lifecycle integration. |
 | `obs_get_video_frame_time`, `obs_add_tick_callback` | Existing Phase 1 canonical nanosecond timeline. |
 | `encoder_packet` and `encoder_packet_time` from `obs-encoder.h` | Observe packet PTS/DTS/keyframe and its PTS/CTS/FERC timing record. |
 
@@ -58,6 +59,35 @@ and performs no audio synchronization work; video is the only observed stream.  
 production video-only replay integration should use a supported video-only output
 type or an OBS-supported public extension point rather than making this activation
 detail part of the architecture.
+
+## Lifecycle: research activation versus target product
+
+### Current research activation
+
+Plugin load alone never creates an `obs_output_t`, adds an `obs_view_t`, or starts a
+video encoder. The default is disabled, and logs that fact once. Setting
+`OBS_SYNC_REPLAY_EXPERIMENT_AUTOSTART=1` explicitly opts into the research run. In
+that mode the plugin registers one public frontend callback and, at
+`OBS_FRONTEND_EVENT_FINISHED_LOADING`, performs one explicit `Start()` attempt after
+the scene collection is available. It logs the explicit activation, successful
+start, and any explicit `Stop()` once each.
+
+`ObserveMasterFrame()` only records canonical frames while the experiment is already
+running. It does not start or retry outputs as master frames advance. Therefore a
+normal OBS startup with the plugin installed leaves no `sync_replay_native_output_*`
+active and must leave Video settings editable. The current explicit mode is solely a
+test control; it is not user-facing configuration, a production hotkey, or Replay
+Buffer frontend integration.
+
+### Target product lifecycle
+
+The product must keep the synchronized native outputs inactive while OBS is idle or
+the vanilla Replay Buffer is off. Vanilla **Start Replay Buffer** must eventually
+activate the synchronized outputs; **Stop Replay Buffer** must stop them; and
+**Save Replay** must eventually save the one shared buffered range. None of those
+Replay Buffer callbacks, buffering, or saving semantics is implemented by this
+research branch. In particular, merely loading the plugin must never cause OBS to
+consider recording or video output active.
 
 ## Source trace: view to `video_t`
 
@@ -165,17 +195,17 @@ main render loop, attaches one normal registered video encoder to each returned
 `video_t`, and groups the video encoders before starting the outputs.  The packet
 callback validates the packet PTS/timing PTS identity, joins CTS to the recorded
 canonical master timestamp, and then validates both outputs for equal native PTS and
-CTS.  It never pairs packets by arrival order.  No custom NVENC code, file output,
-muxer, replay buffer, frontend replay integration, or scene UI is included.
+CTS. It never pairs packets by arrival order. Its outputs can run only after the
+explicit research activation described above. No custom NVENC code, file output,
+muxer, replay buffer, Replay Buffer frontend integration, or scene UI is included.
 
 ## Runtime evidence
 
 ### x264 — PROVEN (10-minute live run)
 
 Portable OBS 32.2.1, configured at a 1920x1080 base, 1280x720 output, and 60 FPS,
-selected `obs_x264` for both outputs.  The experiment started after scene collection
-load.  Representative
-structured records were:
+selected `obs_x264` for both outputs. The experiment started after scene collection
+load with explicit research activation. Representative structured records were:
 
 ```text
 master_frame_id=300 master_pts=73223176489222 encoder_pts=239 ... validation=ok
@@ -199,13 +229,14 @@ No graphics-thread freeze or sustained rendering lag was observed. The native OB
 GPU encode thread handled texture encoding; the prototype adds no custom encoder
 worker or graphics-thread wait.
 
-### Scene switching — UNRESOLVED
+### Scene switching — PROVEN (manual NVENC exercise)
 
 The selected sources are held by `obs_view_set_source`, while Program scene changes
-operate on the main view.  The source trace supports independence, but the repeated
-Program-switch runtime test remains required before claiming it proven. Desktop
-automation was unavailable in the research environment, so this branch does not
-claim the required live switching exercise.
+operate on the main view. During the NVENC run, Program scene switching was
+exercised manually and the independent native A/B validation continued successfully.
+This supports the expected view independence: Program changes affect the main view,
+not the selected sources held by the experimental views. It does not replace a future
+systematic switching/stress matrix.
 
 ## Recommendation for the main plan
 
@@ -227,9 +258,11 @@ diagnostics, adapting downstream records to store native packet timebase metadat
   profile used by this research run was already configured for 1280x720 output and
   was not modified by the experiment.
 - Repeat Program switching between `Gameplay Test`, `Camera Test`, and `Combined
-  Reference` while the independent views remain active.
+  Reference` as part of the future systematic switching/stress matrix.
 - Exercise graphics lag deliberately and prove the production missing-slot policy
   rejects/unambiguously handles unjoinable CTS values.
 - Confirm a supported production video-only output lifecycle, or document the
   smallest accepted OBS extension point, before treating the prototype's
   `null_output` activation detail as a production design.
+- Implement and verify Replay Buffer-owned native-output start and stop transitions
+  before source teardown; the experimental environment flag is not that lifecycle.

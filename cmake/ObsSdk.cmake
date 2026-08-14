@@ -94,3 +94,4 @@ endif()
 
 list(PREPEND CMAKE_PREFIX_PATH "${_obs_install_dir}" "${_obs_deps_dir}")
 find_package(libobs CONFIG REQUIRED)
+find_package(obs-frontend-api CONFIG REQUIRED)
