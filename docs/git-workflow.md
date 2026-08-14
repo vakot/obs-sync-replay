@@ -148,9 +148,35 @@ Before a PR is ready, confirm:
 - no accidental generated or debug files are included;
 - the branch is reasonably current with `master`.
 
-Use a concise, specific PR title such as `Add master frame coordinator`, `Implement
-synchronized replay buffer`, or `Preserve shared PTS across dual encoders`. Never use
-generic titles such as `Updates`, `Changes`, `Fix stuff`, or `OBS improvements`.
+### Pull Request Titles
+
+Every pull request title uses exactly:
+
+```text
+<type>(<context>): [<optional_ticket_id>] <title>
+```
+
+`type` and `context` are mandatory. Use the established type vocabulary from branch
+names and commits where applicable:
+
+```text
+feature  fix  refactor  test  docs  chore  build  ci  perf
+```
+
+The ticket ID is optional. When present, it must be wrapped in square brackets and
+follow the colon before the title. The title must be concise, imperative or
+descriptive, and represent the complete PR scope.
+
+```text
+feature(sync): add master frame coordinator
+fix(timeline): handle runtime video timing changes
+refactor(structure): group components into directories
+feature(rendering): [OBS-123] add dual scene renderer
+```
+
+A PR title does not need to match any individual commit message; it describes the
+complete change that will be squashed into `master`. **Squash and Merge** remains the
+only allowed merge strategy into `master`.
 
 The PR description must explain what changed, why it changed, how it was validated,
 and whether synchronization-critical invariants were affected. For a sensitive
