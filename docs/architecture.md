@@ -103,11 +103,11 @@ redundant paths such as
 `timeline/master-frame-coordinator.cpp` is sufficient. Do not create empty future
 module or component directories.
 
-Current implementations live in `src/plugin/` and `src/timeline/`, with tests
-mirroring the module hierarchy at `tests/timeline/master-frame-timeline-test.cpp`.
-`timeline/master-frame.hpp` owns the reusable immutable `MasterFrame`,
-`MasterFrameId`, and `MasterFramePts` domain types, so rendering and other consumers
-need not include the timeline state machine.
+Current implementations live in `src/plugin/`, `src/timeline/`, `src/rendering/`,
+and `src/pipeline/`, with tests mirroring the module hierarchy. `timeline/master-frame.hpp`
+owns the reusable immutable `MasterFrame`, `MasterFrameId`, and `MasterFramePts`
+domain types, so rendering and downstream consumers need not include the timeline
+state machine.
 
 The intended modules are:
 
@@ -116,6 +116,7 @@ The intended modules are:
 | `plugin` | OBS module lifecycle and top-level composition; never a timing-logic dumping ground |
 | `timeline` | Canonical frame identity, PTS, OBS timing observation, and master timeline lifecycle |
 | `rendering` | Selected-scene render targets associated with an existing `MasterFrame` |
+| `pipeline` | GPU-side retention of one completed A/B render pair and its bounded shared FIFO |
 | `encoding` | Encoder ownership and packet association with submitted master identity |
 | `replay` | One synchronized replay buffer, common ranges, and packet retention |
 | `muxing` | MKV outputs, common replay boundaries, and paired output naming |
@@ -127,8 +128,8 @@ Future modules follow the same flat-within-module convention, for example:
 ```text
 src/rendering/scene-renderer.hpp
 src/rendering/scene-renderer.cpp
-src/encoding/video-encoder.hpp
-src/encoding/video-encoder.cpp
+src/pipeline/synchronized-frame-pipeline.hpp
+src/pipeline/synchronized-frame-pipeline.cpp
 src/replay/synchronized-replay-buffer.hpp
 src/replay/synchronized-replay-buffer.cpp
 src/muxing/replay-muxer.hpp
@@ -139,7 +140,7 @@ These paths are a convention only; do not create future module directories or fi
 until the corresponding implementation work begins.
 
 The intended dependency direction is
-`plugin -> timeline -> rendering -> encoding -> replay/muxing`, while `validation`
+`plugin -> timeline -> rendering -> pipeline -> encoding -> replay/muxing`, while `validation`
 observes relevant domains and `ui` acts as a configuration/control layer. In
 particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but
 `timeline` must not depend on rendering, encoding, replay, muxing, or UI.
@@ -210,17 +211,62 @@ dimensions for that attempt. `gs_texrender_end` marks the target rendered, so ea
 subsequent master-frame attempt resets its own target before beginning; this is a
 graphics-resource lifecycle operation, not a timing decision. The target is created and destroyed only while the
 graphics context is entered. Its texture is GPU-only and remains owned by the
-renderer until that renderer's next render or destruction; Phase 2 does not retain
-textures for encoding or buffering.
+renderer until that renderer's next render or destruction. Phase 3 must therefore
+copy a successful result before the renderer reaches its next render.
 
 `SceneRenderResult` copies the immutable `MasterFrame` and records a fixed A/B slot,
 status, dimensions, and non-owning texture pointer. `SceneRenderPairTracker` accepts
 only the active frame's exact ID and PTS and only one result per slot. Every frame
 therefore attempts A and B even if either fails. Missing, invalid, or unavailable
 scenes retain the current master slot and emit a diagnostic; subsequent frames never
-replace that missing result. The unresolved Phase 3 concern is how to retain or copy
-these short-lived GPU textures under encoder/backpressure without weakening this
-identity contract.
+replace that missing result. Phase 3 retains only the complete successful pair before
+either short-lived source texture can be reused.
+
+## Synchronized GPU Frame Pipeline (Phase 3)
+
+Phase 3 inserts one pair-only boundary directly after both render attempts:
+
+```text
+MasterFrame N
+    |
+render A[N] and B[N]
+    |
+copy A[N] and B[N] into pipeline-owned GPU textures
+    |
+SynchronizedFramePair { MasterFrame N, retained A[N], retained B[N] }
+```
+
+`SynchronizedFramePipeline` owns each `SynchronizedFramePair`; each pair owns two
+move-only `RetainedGpuFrame` values. A retained frame stores its immutable
+`MasterFrame`, fixed A/B output slot, dimensions, color metadata, and exactly one
+owned `gs_texture_t`. Neither retained frame aliases the non-owning texture pointer
+in `SceneRenderResult` or the reusable `SceneRenderer::render_target_`. Copying the
+owner is prohibited, and moving is the only ownership transfer available.
+
+On OBS 32.2.1, the pipeline allocates each destination with `gs_texture_create` and
+submits `gs_copy_texture` while `SynchronizedSceneRenderer` has entered the OBS
+graphics context. The D3D11 backend implements that operation with ordered device
+copy commands, so a later `gs_texrender_reset`/render into the source target cannot
+replace the copied destination's content. The implementation deliberately does not
+stage textures or read pixels back to the CPU. Allocation, copy, and destruction all
+occur inside `obs_enter_graphics()`/`obs_leave_graphics()`; the pipeline is reset in
+that context during renderer stop, before its destructor runs. `TakeNext` provides a
+move-only FIFO handoff for a future consumer; taking and final destruction retain the
+same graphics-context precondition. No retained resource is handed to another thread
+or graphics context in this phase. Future encoders must consume pipeline-owned
+textures under an explicitly designed graphics-context and completion-lifetime
+contract, not raw `SceneRenderer` pointers.
+
+There is one fixed-capacity FIFO for complete pairs, not one queue per output. The
+current development wiring uses capacity four because no encoder yet drains it. The
+queue checks that both resources are present and that both copied identities have
+equal frame ID and PTS before it accepts a pair. When full, it rejects the entire
+new pair before allocating or copying either GPU texture. A missing scene, stale
+result, invalid dimensions, allocation failure, or unequal identity similarly retains
+no half-pair. This phase does not substitute a frame or let a later frame occupy the
+failed slot. `sync-pipeline` diagnostics report `master_frame_id`, `master_pts`,
+status, queue size, and capacity; retained frames are debug-level except for sampled
+observations, while invalid pairs and pressure are explicit errors/warnings.
 
 ## Replay Save Contract
 
@@ -312,11 +358,11 @@ matching `libobs` development target into ignored local state before building th
 plugin. This mirrors the dependency model used by the official OBS plugin template
 while keeping the repository independent of an installed OBS SDK.
 
-The runtime module currently owns no timing, rendering, encoder, buffer, or output
-state. It exports only the standard OBS module lifecycle functions and emits stable
-load/unload log messages. Consequently this bootstrap does not implement or alter any
-synchronization invariant; it provides the host integration boundary on which later
-synchronization-critical changes will build.
+The runtime module owns the master-frame coordinator, synchronous dual-scene
+renderers, and the bounded retained GPU-pair pipeline. It still owns no encoder,
+replay buffer, muxer, save action, audio, or output files. It exports the standard OBS
+module lifecycle functions and emits stable load/unload messages; its current
+synchronization boundary ends at a successfully retained GPU frame pair.
 
 Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and
