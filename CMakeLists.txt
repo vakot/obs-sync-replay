@@ -25,8 +25,10 @@ add_library(
   MODULE
   src/plugin/plugin-main.cpp
   src/timeline/master-frame-coordinator.cpp
+  src/rendering/scene-renderer.cpp
+  src/rendering/synchronized-scene-renderer.cpp
 )
-target_link_libraries(obs-sync-replay PRIVATE OBS::libobs obs-sync-replay-timeline)
+target_link_libraries(obs-sync-replay PRIVATE OBS::libobs obs-sync-replay-rendering-coordination)
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
 target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
