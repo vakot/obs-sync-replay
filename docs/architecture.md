@@ -309,11 +309,10 @@ replace the copied destination's content. The implementation deliberately does n
 stage textures or read pixels back to the CPU. Allocation, copy, and destruction all
 occur inside `obs_enter_graphics()`/`obs_leave_graphics()`; the pipeline is reset in
 that context during renderer stop, before its destructor runs. `TakeNext` provides a
-move-only FIFO handoff for a future consumer; taking and final destruction retain the
-same graphics-context precondition. No retained resource is handed to another thread
-or graphics context in this phase. Future encoders must consume pipeline-owned
-textures under an explicitly designed graphics-context and completion-lifetime
-contract, not raw `SceneRenderer` pointers.
+move-only FIFO handoff to Phase 4; taking and final destruction retain the same
+graphics-context precondition. No retained resource is handed to another thread or
+graphics context: Phase 4 copies it into its own persistent typed input ring before
+asynchronous NVENC ownership begins. It never uses raw `SceneRenderer` pointers.
 
 There is one fixed-capacity FIFO for complete pairs, not one queue per output. The
 current development wiring uses capacity four. The Phase 4 consumer drains this FIFO
@@ -355,14 +354,32 @@ Both force an IDR/SPS/PPS at the same `master_frame_id % 120 == 0` slots. Phase 
 accepts SDR `GS_RGBA` retained textures only; another retained format is an explicit
 encoder failure, not an implicit color conversion or shifted frame.
 
-For each submission, the encoder copies the typeless libobs `GS_RGBA` D3D11 resource
-to a typed RGBA texture and waits for an explicit D3D11 event-query fence. This is the
-point at which the retained source may be destroyed. It then registers and maps that
-typed texture, submits `NV_ENC_PIC_PARAMS`, and locks the bitstream with
-`doNotWait = false`. That lock is the NVENC completion fence. Only after it returns
-does the encoder copy bytes into `EncodedVideoPacket`, unlock, unmap, unregister, and
-destroy the typed input texture. All of these operations, including shutdown and final
-texture destruction, occur with the OBS graphics context entered.
+Each output owns a bounded ring of six persistent typed RGBA D3D11 input textures,
+NVENC registrations, bitstream buffers, and Windows completion events. They are
+created and registered once during graphics-context initialization and reused only
+after their own asynchronous completion has been copied and unmapped. The bounded ring
+is also the resource-lifetime authority: no slot is reused while NVENC still owns its
+mapped input or output bitstream.
+
+The graphics tick copies a retained typeless `GS_RGBA` texture into a reserved typed
+ring texture with `CopyResource`, maps it, and makes the non-blocking
+`nvEncEncodePicture` submission with the frame-specific completion event. It performs
+no `Flush`, D3D11 query polling, event wait, blocking bitstream lock, resource
+registration, bitstream allocation, or resource destruction. D3D command ordering
+keeps the retained source valid through the copy, so the pair can be destroyed after
+submission without a frame-count or wall-clock lifetime assumption.
+
+NVENC runs with `enableEncodeAsync = 1`. Each output has a completion worker that
+waits for its registered events in that output's submission order, uses
+`nvEncLockBitstream(doNotWait = 1)` only after the event signals, copies packet bytes,
+then unlocks and unmaps the slot. Workers never call `gs_*` or use OBS's immediate D3D
+context. The only D3D immediate-context operation is the graphics-thread handoff copy.
+This follows the NVIDIA asynchronous Windows model while respecting libobs graphics
+ownership; the worker's NVENC output retrieval is separate from OBS rendering. See the
+[NVIDIA NVENC programming guide](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html)
+and OBS 32.2.1's
+[`d3d11_encode`](https://github.com/obsproject/obs-studio/blob/32.2.1/plugins/obs-nvenc/nvenc-d3d11.c)
+for the researched API and texture-encoder boundaries.
 
 The source unit is the canonical nanosecond PTS from `obs_get_video_frame_time()`.
 The encoder timebase is fixed at `1/1,000,000,000`, so the checked conversion is exact:
@@ -378,13 +395,18 @@ either submission and associates results by master frame and encoder PTS, never
 completion order. It detects duplicate, unknown, stale, and timestamp-mismatched
 packets in a fixed-capacity table.
 
-Submission is one logical pair operation. If A fails, B is not submitted. If B fails
-after A has been accepted, the A packet is discarded and the entire encoder session
-halts; no later pair is consumed. Both retained-pair and packet tracking capacity are
-four pairs, so pressure rejects whole later pairs and never creates independent A/B
-queues. Sampled `[sync-encode]` logs record submitted/encoded identities. Failures name
-invariants 7, 8, and 9. Phase 5 begins only with synchronized rolling packet history;
-muxing, audio, and file saving remain outside this phase.
+Submission is one logical pair operation. Both output rings must have capacity before
+either submission begins. If either ring is full, the complete A/B master frame is
+dropped explicitly and neither output advances that slot; the graphics thread never
+waits for capacity. If A cannot submit, B is not submitted. If B fails after A was
+accepted, the session halts rather than allowing later work to conceal the partial
+operation. Packet association capacity is six complete pairs and completion order is
+never temporal authority. Sampled `[sync-encode]` logs record submitted/encoded
+identities, while full-ring drops and asynchronous completion failures name invariants
+7, 8, and 9. Shutdown first drains completion workers outside the graphics context,
+then unmaps, unregisters, and destroys their persistent NVENC resources. Phase 5
+begins only with synchronized rolling packet history; muxing, audio, and file saving
+remain outside this phase.
 
 ## Replay Save Contract
 
