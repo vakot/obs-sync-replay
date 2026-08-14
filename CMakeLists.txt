@@ -34,6 +34,7 @@ add_library(
   obs-sync-replay
   MODULE
   src/plugin/plugin-main.cpp
+  src/encoding/native-obs-encoder-experiment.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
