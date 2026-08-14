@@ -54,7 +54,7 @@ slot is a synchronization failure, even if total durations are similar.
 
 As components appear, cover:
 
-- monotonic master-frame ID and exact rational PTS generation at supported OBS FPS;
+- monotonic master-frame ID and strict acceptance/rejection of observed OBS PTS values;
 - identical dispatch identity for both render requests;
 - association of out-of-order encoder completions with the submitted master frames;
 - one missing-render policy, including the first frame when no previous image exists;

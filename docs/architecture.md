@@ -79,6 +79,26 @@ when implementation needs them.
 The exact representation may use separate bounded queues for efficiency. The queues
 must expose one shared logical range and deterministic behavior under backpressure.
 
+## Master Timeline Integration (Phase 1)
+
+The first implementation uses the public libobs `obs_add_tick_callback` lifecycle
+hook and reads `obs_get_video_frame_time()` inside that callback. In OBS Studio
+32.2.1, libobs invokes tick callbacks once per graphics-loop iteration before source
+ticking. The callback runs on libobs's graphics thread, but after libobs has left its
+graphics context; this phase therefore performs no rendering there.
+
+`master_pts` is the returned `uint64_t` OBS video time in nanoseconds. A coordinator
+session begins at `master_frame_id = 0`, accepts only strictly increasing observed
+PTS values, and resets both its frame ID and PTS acceptance state when stopped.
+`MasterFrame` fields are immutable to consumers and only the coordinator's internal
+timeline creates them.
+
+When the graphics loop falls behind, libobs advances its video time by whole frame
+intervals. The coordinator creates one master frame for the observed tick and emits a
+cadence-discontinuity diagnostic instead of inventing unobserved frames. Future
+rendering work must attach to the already-issued `MasterFrame`; it must not fill the
+gap with an independently generated timeline.
+
 ## Replay Save Contract
 
 One hotkey invocation creates a replay ID and snapshots one immutable inclusive range:
