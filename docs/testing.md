@@ -63,6 +63,8 @@ As components appear, cover:
 - one replay-range snapshot applied unchanged to both projections;
 - filename pairing with a shared replay ID/timestamp;
 - stop/restart state reset and rejection of stale callbacks/packets;
+- live OBS frame-interval changes without a master-frame ID reset, PTS rebase, or
+  repeated false cadence-discontinuity diagnostics;
 - validation failures for unequal bounds, counts, identities, or PTS.
 
 Prefer injected ticks and deterministic fake render/encoder completions. Tests must

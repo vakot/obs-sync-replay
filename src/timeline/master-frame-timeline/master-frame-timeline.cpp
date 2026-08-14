@@ -38,6 +38,33 @@ std::optional<MasterFramePts> MasterFrameTimeline::last_pts_ns() const noexcept 
     return last_pts_ns_;
 }
 
+MasterFrameTimingConfigurationResult MasterFrameTimingConfiguration::ObserveFrameInterval(
+    const uint64_t frame_interval_ns) noexcept {
+    if (frame_interval_ns == 0) {
+        return MasterFrameTimingConfigurationResult::InvalidInterval;
+    }
+
+    if (!frame_interval_ns_.has_value()) {
+        frame_interval_ns_ = frame_interval_ns;
+        return MasterFrameTimingConfigurationResult::Initialized;
+    }
+
+    if (*frame_interval_ns_ == frame_interval_ns) {
+        return MasterFrameTimingConfigurationResult::Unchanged;
+    }
+
+    frame_interval_ns_ = frame_interval_ns;
+    return MasterFrameTimingConfigurationResult::Changed;
+}
+
+void MasterFrameTimingConfiguration::Reset() noexcept {
+    frame_interval_ns_.reset();
+}
+
+std::optional<uint64_t> MasterFrameTimingConfiguration::frame_interval_ns() const noexcept {
+    return frame_interval_ns_;
+}
+
 } // namespace detail
 
 } // namespace obs_sync_replay

@@ -140,6 +140,13 @@ PTS values, and resets both its frame ID and PTS acceptance state when stopped.
 `MasterFrame` fields are immutable to consumers and only the coordinator's internal
 timeline creates them.
 
+The coordinator refreshes the configured OBS frame interval on every tick before
+validating observed cadence. A nonzero interval change is logged once as a timing
+configuration transition and takes effect immediately for later cadence checks; the
+transition tick is not misreported as a graphics lag discontinuity. This refresh never
+resets frame IDs, rebases PTS, or manufactures frames: `obs_get_video_frame_time()`
+remains the canonical PTS source throughout the session.
+
 When the graphics loop falls behind, libobs advances its video time by whole frame
 intervals. The coordinator creates one master frame for the observed tick and emits a
 cadence-discontinuity diagnostic instead of inventing unobserved frames. Future

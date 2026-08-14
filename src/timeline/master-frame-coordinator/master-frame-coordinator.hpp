@@ -26,14 +26,14 @@ public:
 private:
     static void OnObsTick(void *parameter, float seconds);
     void ObserveObsTick();
-    void LogTimingConfiguration();
+    MasterFrameTimingConfigurationResult RefreshTimingConfiguration();
 
     FrameSink frame_sink_;
     detail::MasterFrameTimeline timeline_;
+    detail::MasterFrameTimingConfiguration timing_configuration_;
     std::optional<MasterFramePts> last_observed_pts_ns_;
-    uint64_t frame_interval_ns_ = 0;
     uint32_t lagged_frames_ = 0;
-    bool timing_configuration_logged_ = false;
+    bool invalid_timing_configuration_logged_ = false;
     bool running_ = false;
 };
 
