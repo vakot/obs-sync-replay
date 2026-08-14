@@ -278,36 +278,94 @@ void NativeObsEncoderExperiment::ReleaseResources() {
         running_ = false;
     }
 
+    if (was_running) {
+        blog(LOG_INFO, "[native-encoder-experiment] stop requested");
+    }
+
     for (size_t index = 0; index < outputs_.size(); ++index) {
         if (outputs_[index]) {
+            const char* const output_name = OutputName(static_cast<Output>(index));
+            blog(LOG_INFO,
+                 "[native-encoder-experiment] packet callback removal requested output=%s",
+                 output_name);
             obs_output_remove_packet_callback(outputs_[index], PacketCallback,
                                               &output_states_[index]);
+            blog(LOG_INFO, "[native-encoder-experiment] packet callback removed output=%s",
+                 output_name);
+        }
+    }
+
+    // Both grouped encoders receive their stop request before either output is
+    // released. Releasing the first output first can wait on the second group's
+    // active encoder during its capture-thread shutdown.
+    for (size_t index = 0; index < outputs_.size(); ++index) {
+        if (outputs_[index]) {
+            const char* const output_name = OutputName(static_cast<Output>(index));
+            blog(LOG_INFO, "[native-encoder-experiment] output stop requested output=%s",
+                 output_name);
             obs_output_stop(outputs_[index]);
+        }
+    }
+
+    for (size_t index = 0; index < outputs_.size(); ++index) {
+        if (outputs_[index]) {
+            const char* const output_name = OutputName(static_cast<Output>(index));
+
+            // obs_output_release joins each capture thread only after both
+            // grouped outputs have been told to stop. No encoder, audio, or view
+            // resource is released first.
             obs_output_release(outputs_[index]);
             outputs_[index] = nullptr;
+            blog(LOG_INFO, "[native-encoder-experiment] output stop complete output=%s",
+                 output_name);
         }
     }
     if (encoder_group_) {
+        blog(LOG_INFO, "[native-encoder-experiment] encoder group destroy requested");
         obs_encoder_group_destroy(encoder_group_);
         encoder_group_ = nullptr;
+        blog(LOG_INFO, "[native-encoder-experiment] encoder group destroy complete");
     }
-    for (obs_encoder_t*& encoder : encoders_) {
+    for (size_t index = 0; index < encoders_.size(); ++index) {
+        obs_encoder_t*& encoder = encoders_[index];
         if (encoder) {
+            blog(LOG_INFO, "[native-encoder-experiment] video encoder release requested output=%s",
+                 OutputName(static_cast<Output>(index)));
             obs_encoder_release(encoder);
             encoder = nullptr;
+            blog(LOG_INFO, "[native-encoder-experiment] video encoder release complete output=%s",
+                 OutputName(static_cast<Output>(index)));
         }
     }
-    for (obs_encoder_t*& encoder : activation_audio_encoders_) {
+    for (size_t index = 0; index < activation_audio_encoders_.size(); ++index) {
+        obs_encoder_t*& encoder = activation_audio_encoders_[index];
         if (encoder) {
+            blog(LOG_INFO,
+                 "[native-encoder-experiment] activation audio encoder release requested "
+                 "output=%s",
+                 OutputName(static_cast<Output>(index)));
             obs_encoder_release(encoder);
             encoder = nullptr;
+            blog(LOG_INFO,
+                 "[native-encoder-experiment] activation audio encoder release complete "
+                 "output=%s",
+                 OutputName(static_cast<Output>(index)));
         }
     }
-    for (obs_view_t*& view : views_) {
+    for (size_t index = 0; index < views_.size(); ++index) {
+        obs_view_t*& view = views_[index];
         if (view) {
+            blog(LOG_INFO, "[native-encoder-experiment] view remove requested output=%s",
+                 OutputName(static_cast<Output>(index)));
             obs_view_remove(view);
+            blog(LOG_INFO, "[native-encoder-experiment] view remove complete output=%s",
+                 OutputName(static_cast<Output>(index)));
+            blog(LOG_INFO, "[native-encoder-experiment] view destroy requested output=%s",
+                 OutputName(static_cast<Output>(index)));
             obs_view_destroy(view);
             view = nullptr;
+            blog(LOG_INFO, "[native-encoder-experiment] view destroy complete output=%s",
+                 OutputName(static_cast<Output>(index)));
         }
     }
     videos_.fill(nullptr);
@@ -317,7 +375,7 @@ void NativeObsEncoderExperiment::ReleaseResources() {
     packet_pairs_.clear();
 
     if (was_running) {
-        blog(LOG_INFO, "[native-encoder-experiment] stopped");
+        blog(LOG_INFO, "[native-encoder-experiment] stop complete");
     }
 }
 

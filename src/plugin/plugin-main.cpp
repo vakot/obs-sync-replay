@@ -13,6 +13,7 @@ namespace {
 std::unique_ptr<obs_sync_replay::MasterFrameCoordinator> master_frame_coordinator;
 std::unique_ptr<obs_sync_replay::NativeObsEncoderExperiment> native_encoder_experiment;
 bool native_encoder_experiment_autostart_enabled = false;
+bool native_encoder_experiment_frontend_callback_registered = false;
 
 constexpr char kDevelopmentSceneA[] = "Gameplay Test";
 constexpr char kDevelopmentSceneB[] = "Camera Test";
@@ -36,6 +37,18 @@ void OnFrontendEvent(const obs_frontend_event event, void*) {
              "[obs-sync-replay] native encoder experiment autostart explicitly activated after "
              "frontend loading");
         native_encoder_experiment->Start();
+    } else if (event == OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN) {
+        // OBS emits this before ClearSceneData(), audio/video teardown, and module
+        // unloading. Stopping here keeps null_output's capture thread from
+        // disconnecting global audio after its synchronization primitives are gone.
+        blog(LOG_INFO,
+             "[obs-sync-replay] native encoder experiment shutdown cleanup requested before "
+             "OBS scene/audio teardown");
+        native_encoder_experiment->Stop();
+        if (native_encoder_experiment_frontend_callback_registered) {
+            obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+            native_encoder_experiment_frontend_callback_registered = false;
+        }
     }
 }
 
@@ -58,6 +71,7 @@ bool obs_module_load(void) {
     native_encoder_experiment_autostart_enabled = ExperimentalAutostartEnabled();
     if (native_encoder_experiment_autostart_enabled) {
         obs_frontend_add_event_callback(OnFrontendEvent, nullptr);
+        native_encoder_experiment_frontend_callback_registered = true;
         blog(LOG_INFO, "[obs-sync-replay] native encoder experiment autostart enabled; waiting for "
                        "frontend loading");
     } else {
@@ -73,8 +87,9 @@ bool obs_module_load(void) {
 }
 
 void obs_module_unload(void) {
-    if (native_encoder_experiment_autostart_enabled) {
+    if (native_encoder_experiment_frontend_callback_registered) {
         obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+        native_encoder_experiment_frontend_callback_registered = false;
     }
     native_encoder_experiment_autostart_enabled = false;
     master_frame_coordinator.reset();
