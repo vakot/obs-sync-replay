@@ -1,8 +1,8 @@
 # Architecture
 
 This document turns the product model in [`../mvp-plan.md`](../mvp-plan.md) into
-implementation boundaries. It deliberately avoids prescribing a source tree or
-specific libobs calls before those APIs have been validated.
+implementation boundaries, source organization, and architectural decisions that
+protect synchronization invariants.
 
 ## Synchronization Contract
 
@@ -62,6 +62,88 @@ when implementation needs them.
 | Validation | Check range, frame/slot counts, identities, PTS, and declared missing-slot policy | Downgrade drift to a warning and call the pair synchronized |
 | Logging | Emit joinable lifecycle, queue, missing-slot, range, and validation events | Report only generic success/failure text |
 
+## Module-Oriented Source Layout
+
+The source root is an internal include root. Organization is:
+
+```text
+repository
+  ↓
+module
+  ↓
+component files
+```
+
+Modules are meaningful architectural/subsystem boundaries. Components normally live
+directly inside their owning module; a module already supplies the organizational
+context. For example:
+
+```text
+src/
+|-- plugin/
+|   `-- plugin-main.cpp
+`-- timeline/
+    |-- master-frame.hpp
+    |-- master-frame-timeline.hpp
+    |-- master-frame-timeline.cpp
+    |-- master-frame-coordinator.hpp
+    `-- master-frame-coordinator.cpp
+```
+
+Code includes project headers from that root, for example
+`#include "timeline/master-frame.hpp"`; relative upward paths and `src/...` includes
+are not used. Component files retain explicit descriptive names; `index.hpp` and
+`index.cpp` are not used.
+
+Introduce a nested directory inside a module only when a concrete organizational need
+exists, such as a large subsystem with several closely related components or resources.
+Do not create a directory for every C++ class or `.hpp`/`.cpp` pair, and do not use
+redundant paths such as
+`timeline/master-frame-coordinator/master-frame-coordinator.cpp` when
+`timeline/master-frame-coordinator.cpp` is sufficient. Do not create empty future
+module or component directories.
+
+Current implementations live in `src/plugin/` and `src/timeline/`, with tests
+mirroring the module hierarchy at `tests/timeline/master-frame-timeline-test.cpp`.
+`timeline/master-frame.hpp` owns the reusable immutable `MasterFrame`,
+`MasterFrameId`, and `MasterFramePts` domain types, so rendering and other consumers
+need not include the timeline state machine.
+
+The intended modules are:
+
+| Module | Responsibility |
+| --- | --- |
+| `plugin` | OBS module lifecycle and top-level composition; never a timing-logic dumping ground |
+| `timeline` | Canonical frame identity, PTS, OBS timing observation, and master timeline lifecycle |
+| `rendering` | Selected-scene render targets associated with an existing `MasterFrame` |
+| `encoding` | Encoder ownership and packet association with submitted master identity |
+| `replay` | One synchronized replay buffer, common ranges, and packet retention |
+| `muxing` | MKV outputs, common replay boundaries, and paired output naming |
+| `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
+| `ui` | OBS configuration and controls without synchronization logic |
+
+Future modules follow the same flat-within-module convention, for example:
+
+```text
+src/rendering/scene-renderer.hpp
+src/rendering/scene-renderer.cpp
+src/encoding/video-encoder.hpp
+src/encoding/video-encoder.cpp
+src/replay/synchronized-replay-buffer.hpp
+src/replay/synchronized-replay-buffer.cpp
+src/muxing/replay-muxer.hpp
+src/muxing/replay-muxer.cpp
+```
+
+These paths are a convention only; do not create future module directories or files
+until the corresponding implementation work begins.
+
+The intended dependency direction is
+`plugin -> timeline -> rendering -> encoding -> replay/muxing`, while `validation`
+observes relevant domains and `ui` acts as a configuration/control layer. In
+particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but
+`timeline` must not depend on rendering, encoding, replay, muxing, or UI.
+
 ## Frame Lifecycle
 
 1. The coordinator accepts or generates the next master tick.
@@ -78,6 +160,33 @@ when implementation needs them.
 
 The exact representation may use separate bounded queues for efficiency. The queues
 must expose one shared logical range and deterministic behavior under backpressure.
+
+## Master Timeline Integration (Phase 1)
+
+The first implementation uses the public libobs `obs_add_tick_callback` lifecycle
+hook and reads `obs_get_video_frame_time()` inside that callback. In OBS Studio
+32.2.1, libobs invokes tick callbacks once per graphics-loop iteration before source
+ticking. The callback runs on libobs's graphics thread, but after libobs has left its
+graphics context; this phase therefore performs no rendering there.
+
+`master_pts` is the returned `uint64_t` OBS video time in nanoseconds. A coordinator
+session begins at `master_frame_id = 0`, accepts only strictly increasing observed
+PTS values, and resets both its frame ID and PTS acceptance state when stopped.
+`MasterFrame` fields are immutable to consumers and only the coordinator's internal
+timeline creates them.
+
+The coordinator refreshes the configured OBS frame interval on every tick before
+validating observed cadence. A nonzero interval change is logged once as a timing
+configuration transition and takes effect immediately for later cadence checks; the
+transition tick is not misreported as a graphics lag discontinuity. This refresh never
+resets frame IDs, rebases PTS, or manufactures frames: `obs_get_video_frame_time()`
+remains the canonical PTS source throughout the session.
+
+When the graphics loop falls behind, libobs advances its video time by whole frame
+intervals. The coordinator creates one master frame for the observed tick and emits a
+cadence-discontinuity diagnostic instead of inventing unobserved frames. Future
+rendering work must attach to the already-issued `MasterFrame`; it must not fill the
+gap with an independently generated timeline.
 
 ## Replay Save Contract
 

@@ -95,9 +95,11 @@ comments to explain timing assumptions and causality, not to narrate code:
 
 Follow [`docs/git-workflow.md`](docs/git-workflow.md): one logical change per branch
 and PR, branches named `<type>/vakot/<optional_ticket_id>/<description>`, focused
-`<type>(<context>): <description>` commits, and Squash and Merge into protected
-`master`. Never work directly on `master`. If this directory is not a Git worktree,
-stop before implementation; initialize or clone only with user authorization.
+`<type>(<context>): <description>` commits, mandatory
+`<type>(<context>): [<optional_ticket_id>] <title>` PR titles, and Squash and Merge
+into protected `master`. Never work directly on `master`. If this directory is not a
+Git worktree, stop before implementation; initialize or clone only with user
+authorization.
 
 At task startup:
 
@@ -120,6 +122,11 @@ instructed; any permitted integration into `master` must use the repository's Sq
 and Merge policy.
 
 ## Engineering Conventions
+
+Organize code primarily by `src/<module>/`; keep normal component files directly in
+their module as `src/<module>/<component>.*`. Introduce deeper directories only when
+concrete complexity justifies them; do not create speculative directories or generic
+`index.*` files. See [`docs/architecture.md`](docs/architecture.md) for details.
 
 Follow [`docs/building.md`](docs/building.md) and repository formatter/static-analysis
 configuration once bootstrapped. Prefer modern, unsurprising C++ with:
