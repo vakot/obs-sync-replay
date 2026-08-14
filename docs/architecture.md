@@ -258,7 +258,8 @@ textures under an explicitly designed graphics-context and completion-lifetime
 contract, not raw `SceneRenderer` pointers.
 
 There is one fixed-capacity FIFO for complete pairs, not one queue per output. The
-current development wiring uses capacity four because no encoder yet drains it. The
+current development wiring uses capacity four. The Phase 4 consumer drains this FIFO
+inside the same entered graphics context on every successful render tick. The
 queue checks that both resources are present and that both copied identities have
 equal frame ID and PTS before it accepts a pair. When full, it rejects the entire
 new pair before allocating or copying either GPU texture. A missing scene, stale
@@ -267,6 +268,65 @@ no half-pair. This phase does not substitute a frame or let a later frame occupy
 failed slot. `sync-pipeline` diagnostics report `master_frame_id`, `master_pts`,
 status, queue size, and capacity; retained frames are debug-level except for sampled
 observations, while invalid pairs and pressure are explicit errors/warnings.
+
+## Synchronized Dual Video Encoding (Phase 4)
+
+Phase 4 consumes, encodes, validates, and discards retained pairs. It does not retain
+encoded history, mux an MKV, capture audio, or save a replay.
+
+OBS 32.2.1 exposes `obs_video_encoder_create`, `obs_encoder_set_video`, and
+`obs_encoder_start` publicly, but it does not expose a public operation to submit an
+arbitrary externally rendered `gs_texture_t` with a caller-supplied PTS.
+`obs_encoder_info::encode_texture2` is an encoder implementation callback invoked by
+libobs's private GPU-video worker over its own converted-texture queues and PTS
+sequence. Therefore, creating two `obs_encoder_t` instances would attach this feature
+to OBS's normal video/output timeline rather than make `MasterFrame` authoritative.
+
+`obs_nvenc_h264_tex` confirms the backend is texture-capable: on Windows its internal
+`d3d11_encode` callback imports an OBS texture and passes a PTS to
+`nvEncEncodePicture`. The callback is not public to modules. Phase 4 instead uses the
+supported NVIDIA NVENC driver API directly over the public libobs graphics accessors
+`gs_get_device_obj` and `gs_texture_get_obj`, while `obs_enter_graphics()` is active.
+`VideoEncoder` isolates this H.264/D3D11 implementation; it does not copy OBS private
+encoder structures or call private libobs symbols.
+
+Both outputs use identical development settings: H.264 High 4:4:4 (required for the
+direct RGBA input), NVENC P3 ultra-low-
+latency tuning, CBR 16 Mb/s, a 120-master-frame GOP/IDR cadence, and no B-frames.
+Both force an IDR/SPS/PPS at the same `master_frame_id % 120 == 0` slots. Phase 4
+accepts SDR `GS_RGBA` retained textures only; another retained format is an explicit
+encoder failure, not an implicit color conversion or shifted frame.
+
+For each submission, the encoder copies the typeless libobs `GS_RGBA` D3D11 resource
+to a typed RGBA texture and waits for an explicit D3D11 event-query fence. This is the
+point at which the retained source may be destroyed. It then registers and maps that
+typed texture, submits `NV_ENC_PIC_PARAMS`, and locks the bitstream with
+`doNotWait = false`. That lock is the NVENC completion fence. Only after it returns
+does the encoder copy bytes into `EncodedVideoPacket`, unlock, unmap, unregister, and
+destroy the typed input texture. All of these operations, including shutdown and final
+texture destruction, occur with the OBS graphics context entered.
+
+The source unit is the canonical nanosecond PTS from `obs_get_video_frame_time()`.
+The encoder timebase is fixed at `1/1,000,000,000`, so the checked conversion is exact:
+`encoder_pts = int64(master_pts_ns)`. There is no FPS-dependent division or rounding.
+Strictly monotonic master PTS produces strictly monotonic encoder PTS; a 60 -> 30 ->
+60 cadence change continues the same IDs and PTS without reset or rebase. NVENC must
+return the submitted timestamp or the encoder fails. Its nominal configured frame rate
+is codec/rate-control configuration, never timeline authority.
+
+`EncodedVideoPacket` owns copied bytes plus immutable `MasterFrame`, output slot, PTS,
+DTS, and keyframe state. `EncodedPacketTracker` records expected A/B identities before
+either submission and associates results by master frame and encoder PTS, never
+completion order. It detects duplicate, unknown, stale, and timestamp-mismatched
+packets in a fixed-capacity table.
+
+Submission is one logical pair operation. If A fails, B is not submitted. If B fails
+after A has been accepted, the A packet is discarded and the entire encoder session
+halts; no later pair is consumed. Both retained-pair and packet tracking capacity are
+four pairs, so pressure rejects whole later pairs and never creates independent A/B
+queues. Sampled `[sync-encode]` logs record submitted/encoded identities. Failures name
+invariants 7, 8, and 9. Phase 5 begins only with synchronized rolling packet history;
+muxing, audio, and file saving remain outside this phase.
 
 ## Replay Save Contract
 
@@ -359,10 +419,11 @@ plugin. This mirrors the dependency model used by the official OBS plugin templa
 while keeping the repository independent of an installed OBS SDK.
 
 The runtime module owns the master-frame coordinator, synchronous dual-scene
-renderers, and the bounded retained GPU-pair pipeline. It still owns no encoder,
-replay buffer, muxer, save action, audio, or output files. It exports the standard OBS
-module lifecycle functions and emits stable load/unload messages; its current
-synchronization boundary ends at a successfully retained GPU frame pair.
+renderers, bounded retained GPU-pair pipeline, and two direct NVENC H.264 sessions.
+It still owns no replay buffer, muxer, save action, audio, or output files. It exports
+the standard OBS module lifecycle functions and emits stable load/unload messages; its
+current synchronization boundary ends at owned encoded packets, which are observed and
+discarded after validation.
 
 Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and
