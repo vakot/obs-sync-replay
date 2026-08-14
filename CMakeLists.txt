@@ -11,7 +11,12 @@ option(OBS_SYNC_REPLAY_WARNINGS_AS_ERRORS "Treat plugin compiler warnings as err
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ObsSdk)
 
-add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.cpp)
+add_library(
+  obs-sync-replay-timeline
+  STATIC
+  src/timeline/experimental-graphics-lag-injector.cpp
+  src/timeline/master-frame-timeline.cpp
+)
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 

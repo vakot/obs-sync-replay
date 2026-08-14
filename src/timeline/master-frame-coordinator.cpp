@@ -2,6 +2,8 @@
 
 #include <obs-module.h>
 
+#include <chrono>
+#include <thread>
 #include <utility>
 
 namespace obs_sync_replay {
@@ -22,6 +24,7 @@ void MasterFrameCoordinator::Start() {
     timeline_.Reset();
     timing_configuration_.Reset();
     last_observed_pts_ns_.reset();
+    lag_injector_ = detail::ExperimentalGraphicsLagInjector::FromEnvironment();
     lagged_frames_ = obs_get_lagged_frames();
     invalid_timing_configuration_logged_ = false;
     running_ = true;
@@ -29,6 +32,32 @@ void MasterFrameCoordinator::Start() {
     RefreshTimingConfiguration();
     obs_add_tick_callback(OnObsTick, this);
     blog(LOG_INFO, "[sync-timeline] coordinator started; PTS units=nanoseconds");
+
+    const detail::ExperimentalGraphicsLagInjectionConfiguration& lag_configuration =
+        lag_injector_.configuration();
+    switch (lag_injector_.status()) {
+    case detail::ExperimentalGraphicsLagInjectionStatus::Disabled:
+        blog(LOG_INFO, "[sync-timeline] research graphics-lag injector disabled; set "
+                       "OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_MS for explicit activation");
+        break;
+    case detail::ExperimentalGraphicsLagInjectionStatus::Enabled:
+        blog(LOG_WARNING,
+             "[sync-timeline] research graphics-lag injector enabled delay_ms=%u "
+             "every_master_frames=%llu injection_point=graphics_tick_after_master_observation",
+             lag_configuration.delay_ms,
+             static_cast<unsigned long long>(lag_configuration.every_master_frames));
+        break;
+    case detail::ExperimentalGraphicsLagInjectionStatus::InvalidDelay:
+        blog(LOG_ERROR,
+             "[sync-timeline] research graphics-lag injector disabled: "
+             "OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_MS must be an integer from 1 to 100");
+        break;
+    case detail::ExperimentalGraphicsLagInjectionStatus::InvalidCadence:
+        blog(LOG_ERROR,
+             "[sync-timeline] research graphics-lag injector disabled: "
+             "OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_EVERY must be an integer from 1 to 1000000");
+        break;
+    }
 }
 
 void MasterFrameCoordinator::Stop() {
@@ -131,6 +160,16 @@ void MasterFrameCoordinator::ObserveObsTick() {
              "the coordinator retained its canonical timeline",
              static_cast<unsigned long long>(frame.frame_id()),
              static_cast<unsigned long long>(frame.pts_ns()));
+    }
+
+    if (lag_injector_.ShouldInject(frame.frame_id())) {
+        const uint32_t delay_ms = lag_injector_.configuration().delay_ms;
+        blog(LOG_WARNING,
+             "[sync-timeline] research graphics-lag injection master_frame_id=%llu master_pts=%llu "
+             "intended_delay_ms=%u",
+             static_cast<unsigned long long>(frame.frame_id()),
+             static_cast<unsigned long long>(frame.pts_ns()), delay_ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
     }
 }
 

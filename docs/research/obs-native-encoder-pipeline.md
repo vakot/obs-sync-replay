@@ -251,6 +251,50 @@ that slot. Until source-plus-runtime evidence defines the repeated/missing-slot
 mapping, a lagged packet set must be retained as a diagnosed, unsupported condition
 rather than accepted as approximately synchronized.
 
+### Deterministic graphics-lag reproduction
+
+The research branch provides a deliberately opt-in injector for reproducing this
+boundary without touching packet callbacks, encoder workers, capture code, PTS,
+CTS, or MasterFrame creation:
+
+```text
+OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_MS=<1..100>
+OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_EVERY=<1..1000000>  # optional; defaults to 600
+```
+
+It is disabled when `OBS_SYNC_REPLAY_EXPERIMENT_INJECT_LAG_MS` is absent or invalid.
+The coordinator logs the disabled/enabled state once at startup, and logs each
+injection with its canonical master-frame ID, master PTS, intended delay, and
+cadence. An invalid delay or cadence disables the injector; no production setting
+or frame identity is changed.
+
+The delay runs in the existing `obs_add_tick_callback` on the OBS graphics thread,
+immediately after the coordinator has observed and dispatched the canonical
+MasterFrame. OBS invokes that callback at the beginning of its graphics iteration
+([`libobs/obs-video.c:42-56`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L42-L56)).
+The normal `video_sleep` calculation later in that same iteration remains solely
+responsible for detecting lateness and emitting any real `obs_vframe_info.count >
+1` slots. The injector therefore exercises the existing libobs lag path instead of
+simulating duplication in the plugin.
+
+At 60 fps, a 20--25 ms delay is a useful control because it makes the next core
+timing calculation late without necessarily producing `count > 1`: libobs floors
+the elapsed interval count. A delay above two 16.67 ms intervals (35--40 ms in
+practice) is required to request a duplicated-slot event. These are controlled
+stress inputs, not a guarantee about host scheduling.
+
+The first uncommitted NVENC control run at 1920x1080/60 applied 25 ms at a cadence
+of 600 master frames. It recorded 13 injection events and continued to emit normal
+single-packet A/B validations, but recorded zero graphics-lag counter changes and
+zero cadence discontinuities. This is expected control evidence, not a successful
+duplicated-slot run and makes no claim about reproducing the preserved same-CTS
+anomaly. The required 35--40 ms NVENC run and x264 comparison remain pending.
+
+Baseline context remains important: the previous clean long run processed 133,342
+master frames in about 37 minutes with zero observed rendering/encoding lag and an
+average render time of roughly 0.5 ms. The injected runs must be compared against
+that normal-cadence evidence, not treated as normal operation.
+
 ## Source trace: `video_t` to `obs_encoder_t`
 
 ### PROVEN
