@@ -1,0 +1,44 @@
+# Local portable OBS development instance and machine configuration
+obs-dev/
+.deps/
+CMakeUserPresets.json
+scripts/dev-config.ps1
+.env
+.env.*
+!.env.example
+
+# CMake and generated build output
+build/
+build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+
+# Compiled artifacts
+*.dll
+*.exe
+*.exp
+*.ilk
+*.lib
+*.obj
+*.pdb
+
+# Visual Studio and editors
+.vs/
+.vscode/
+*.sln
+*.suo
+*.user
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Temporary files
+*.log
+*.tmp
+*.swp
+*~

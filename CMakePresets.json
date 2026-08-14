@@ -1,0 +1,64 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "warnings": {
+        "dev": true,
+        "deprecated": true
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows x64 Debug",
+      "description": "Configure the OBS Sync Replay plugin for a Debug build",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/windows-debug"
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows x64 Release",
+      "description": "Configure the OBS Sync Replay plugin for a Release build",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/windows-release"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
