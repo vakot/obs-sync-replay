@@ -15,6 +15,7 @@ add_library(
   obs-sync-replay-timeline
   STATIC
   src/timeline/experimental-graphics-lag-injector.cpp
+  src/timeline/logical-video-slot-timeline.cpp
   src/timeline/master-frame-timeline.cpp
 )
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "timeline/master-frame.hpp"
+#include "timeline/logical-video-slot-timeline.hpp"
 
 #include <array>
 #include <cstdint>
@@ -38,9 +38,8 @@ class NativeObsEncoderExperiment final {
     bool Start();
     void Stop();
 
-    // Called by the existing MasterFrameCoordinator on the OBS graphics thread
-    // while the explicitly activated experiment is running. Packet callbacks use
-    // this table to prove CTS-to-master association.
+    // Called for rendered graphics observations. The experiment expands OBS-owned
+    // repeated logical slots before joining public packet CTS values.
     void ObserveMasterFrame(const MasterFrame& frame);
 
     enum class Output : uint8_t { A = 0, B = 1 };
@@ -62,13 +61,17 @@ class NativeObsEncoderExperiment final {
         uint64_t previous_cts = 0;
     };
 
-    struct CanonicalFrame final {
-        MasterFrameId frame_id = 0;
+    struct CanonicalLogicalSlot final {
+        detail::LogicalVideoSlotId slot_id = 0;
         MasterFramePts pts_ns = 0;
+        MasterFrameId rendered_frame_id = 0;
+        MasterFramePts rendered_pts_ns = 0;
+        detail::LogicalVideoSlotDisposition disposition =
+            detail::LogicalVideoSlotDisposition::Rendered;
     };
 
     struct PacketSet final {
-        CanonicalFrame canonical;
+        CanonicalLogicalSlot canonical;
         std::array<std::vector<PacketObservation>, 2> outputs{};
         bool single_packet_validation_logged = false;
         bool single_packet_validation_failed_logged = false;
@@ -99,8 +102,9 @@ class NativeObsEncoderExperiment final {
     obs_encoder_group_t* encoder_group_ = nullptr;
 
     std::mutex observations_mutex_;
-    std::map<MasterFramePts, CanonicalFrame> master_frames_by_pts_;
-    std::map<MasterFrameId, PacketSet> packet_sets_;
+    detail::LogicalVideoSlotTimeline logical_slot_timeline_;
+    std::map<MasterFramePts, CanonicalLogicalSlot> logical_slots_by_pts_;
+    std::map<detail::LogicalVideoSlotId, PacketSet> packet_sets_;
     std::array<PacketObservation, 2> previous_packets_{};
     std::array<bool, 2> has_previous_packets_{};
     bool running_ = false;

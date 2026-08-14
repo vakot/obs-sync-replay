@@ -148,12 +148,12 @@ separate rendered mixes, but each accepted non-lagged core frame receives the sa
 When the graphics loop is late, `video_sleep` sets `count > 1`, advances core video
 time by whole frame intervals, and records lagged frames
 ([`libobs/obs-video.c:807-833`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L807-L833)).
-The existing `MasterFrameCoordinator` intentionally accepts only the observed tick
-and logs its cadence discontinuity.  A production integration must reject or make
-an explicit paired missing/duplicate-slot decision for any native CTS that cannot be
-joined to an accepted `MasterFrame`; it must not infer identity from the duplicate
-count or callback order.  This branch's experiment logs that condition as an
-invariant 3 failure.
+`MasterFrameCoordinator` is a rendered-frame observer: it accepts only graphics
+ticks it actually sees and logs a cadence discontinuity. That is not sufficient to
+describe every OBS logical video slot. The experiment now keeps a separate,
+source-derived logical-slot registry for the fixed-FPS research case; it never calls
+those OBS-owned repeated slots fabricated rendered frames. Production must make the
+two identities explicit rather than infer either one from callback order.
 
 ## Graphics lag / duplicated-slot semantics
 
@@ -294,6 +294,80 @@ Baseline context remains important: the previous clean long run processed 133,34
 master frames in about 37 minutes with zero observed rendering/encoding lag and an
 average render time of roughly 0.5 ms. The injected runs must be compared against
 that normal-cadence evidence, not treated as normal operation.
+
+### Canonical logical-slot model — OBS 32.2.1 source trace
+
+`MasterFrame` and a logical video slot are separate identities:
+
+```text
+rendered observation X
+  -> logical slot X       (rendered; anchor X)
+  -> logical slot X + Δ   (repeated; anchor X)  # only when count > 1
+next rendered observation X + 2Δ
+  -> logical slot X + 2Δ (rendered; anchor X + 2Δ)
+```
+
+The source establishes the following.
+
+1. `video_sleep` takes the current core video time as the first slot timestamp,
+   calculates `count = floor(elapsed / interval)` when late, advances core video
+   time by `count * interval`, and queues `{ timestamp = current_time, count }` to
+   every active mix. Thus `count` is the number of logical slots represented by
+   the rendered image, not an encoder-local retry count
+   ([`obs-video.c:805-860`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L805-L860)).
+2. On the raw path, `video_output_lock_frame` stores that initial timestamp and
+   count. Its video thread invokes the encoder once, then increments the cached
+   timestamp by the configured frame interval and decrements count. A `count = 2`
+   therefore reaches the raw encoder as CTS `X`, then CTS `X + Δ`; larger counts
+   continue `X + 2Δ`, `X + 3Δ`, and so on
+   ([`video-io.c:126-214`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L126-L214),
+   [`video-io.c:509-543`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/media-io/video-io.c#L509-L543)).
+3. The texture path has the same source-defined CTS progression. `queue_frame`
+   represents duplication by incrementing one texture frame's count. The GPU
+   encode thread records `ept.cts = tf.timestamp` for each request, then increments
+   `tf.timestamp` by its interval before placing a remaining count back on the
+   queue ([`obs-video.c:442-515`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video.c#L442-L515),
+   [`obs-video-gpu-encode.c:154-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-video-gpu-encode.c#L154-L210)).
+   OBS 32.2.1 therefore does **not** source-document intentional reuse of one CTS
+   for two texture encode requests.
+4. Both paths issue encoder requests with the encoder's local `cur_pts` and
+   advance it once after each successful request. Libobs records each
+   `encoder_packet_time` with that PTS and the request CTS; output delivery matches
+   packet timing by exact PTS, while B-frame reorder can change DTS/order without
+   changing this PTS association
+   ([`obs-encoder.c:1417-1503`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1417-L1503),
+   [`obs-encoder.c:1585-1638`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.c#L1585-L1638),
+   [`obs-output.c:1716-1754`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L1716-L1754)).
+
+This proves a continuous OBS logical-slot sequence for a stable video
+configuration. It does **not** make native encoder PTS a global canonical clock:
+`cur_pts` resets when an encoder starts, belongs to one encoder, only advances after
+successful requests, and encoder groups coordinate start timestamps rather than a
+shared PTS counter. A restart, different frame-rate divisor, failure, or separately
+started output creates a new per-encoder epoch. A frame-rate change is likewise an
+explicit logical-timeline boundary; this prototype does not infer repeated slots
+across it.
+
+The reported 40 ms injected runs are consistent with the raw-path source model:
+x264's `CTS = X + Δ` is an OBS-created repeated logical slot, not an encoder error.
+The reported NVENC same-CTS double observations conflict with the 32.2.1 texture
+source trace above. They remain a diagnosed research discrepancy; the experiment
+does not reinterpret them through a PTS activation offset or callback arrival order.
+
+For validation only, the branch now expands the constant-FPS gap between adjacent
+rendered `MasterFrame` observations into `LogicalVideoSlot` records. A repeated
+slot carries its preceding rendered frame as an anchor and is indexed by its source
+derived CTS. Packets join that registry by CTS. This accepts x264's legitimate
+`X + Δ` slot while retaining a repeated same-CTS NVENC packet set as observable
+evidence. It is not a production refactor, does not alter `MasterFrame`, and does
+not claim that `encoder_pts - activation_base_pts` is safe for synchronization.
+
+The local 1920x1080/60 x264 probe used a 40 ms delay every 300 rendered frames. It
+produced 12 cadence discontinuities, 12 increments of `lagged_frames`, and 12
+registered repeated logical slots, with zero `has no known OBS logical slot`
+diagnostics. The next clean run will also retain INFO-level successful A/B packet
+validation for every repeated slot. The active probe did not exit after a normal
+close request, so no forced termination was used.
 
 ## Source trace: `video_t` to `obs_encoder_t`
 

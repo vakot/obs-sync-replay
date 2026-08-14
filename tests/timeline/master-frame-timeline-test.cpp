@@ -1,4 +1,5 @@
 #include "timeline/experimental-graphics-lag-injector.hpp"
+#include "timeline/logical-video-slot-timeline.hpp"
 #include "timeline/master-frame-timeline.hpp"
 
 #include <cstdlib>
@@ -13,6 +14,10 @@ using obs_sync_replay::MasterFrameTimingConfigurationResult;
 using obs_sync_replay::detail::ExperimentalGraphicsLagInjectionConfiguration;
 using obs_sync_replay::detail::ExperimentalGraphicsLagInjectionStatus;
 using obs_sync_replay::detail::ExperimentalGraphicsLagInjector;
+using obs_sync_replay::detail::LogicalVideoSlot;
+using obs_sync_replay::detail::LogicalVideoSlotDisposition;
+using obs_sync_replay::detail::LogicalVideoSlotObservationResult;
+using obs_sync_replay::detail::LogicalVideoSlotTimeline;
 using obs_sync_replay::detail::MasterFrameTimeline;
 using obs_sync_replay::detail::MasterFrameTimingConfiguration;
 
@@ -140,6 +145,64 @@ void TestExperimentalGraphicsLagInjectorIsBoundedAndDeterministic() {
             "zero research lag cadence must be disabled");
 }
 
+void TestLogicalVideoSlotsRepresentObsRepeatedSlots() {
+    LogicalVideoSlotTimeline timeline;
+    MasterFrameTimeline master_timeline;
+    std::vector<LogicalVideoSlot> slots;
+    const MasterFrame first = Observe(master_timeline, 1'000);
+
+    Require(timeline.ObserveRenderedFrame(first, 10, slots) ==
+                LogicalVideoSlotObservationResult::Accepted,
+            "first rendered frame must establish the first logical slot");
+    Require(slots.size() == 1 && slots[0].slot_id == 0 &&
+                slots[0].disposition == LogicalVideoSlotDisposition::Rendered,
+            "first logical slot must be rendered");
+
+    const MasterFrame second = Observe(master_timeline, 1'020);
+    Require(timeline.ObserveRenderedFrame(second, 10, slots) ==
+                LogicalVideoSlotObservationResult::Accepted,
+            "a two-slot rendered gap must be accepted");
+    Require(slots.size() == 2, "one missed deadline must produce one OBS repeated logical slot");
+    Require(slots[0].slot_id == 1 && slots[0].pts_ns == 1'010 &&
+                slots[0].rendered_frame_id == first.frame_id() &&
+                slots[0].rendered_pts_ns == 1'000 &&
+                slots[0].disposition == LogicalVideoSlotDisposition::Repeated,
+            "repeated slot must retain the prior rendered frame as its anchor");
+    Require(slots[1].slot_id == 2 && slots[1].pts_ns == 1'020 &&
+                slots[1].rendered_frame_id == second.frame_id() &&
+                slots[1].disposition == LogicalVideoSlotDisposition::Rendered,
+            "next observed graphics frame must occupy its own logical slot");
+
+    const MasterFrame third = Observe(master_timeline, 1'050);
+    Require(timeline.ObserveRenderedFrame(third, 10, slots) ==
+                LogicalVideoSlotObservationResult::Accepted,
+            "a three-slot rendered gap must be accepted");
+    Require(slots.size() == 3 && slots[0].pts_ns == 1'030 && slots[1].pts_ns == 1'040 &&
+                slots[0].disposition == LogicalVideoSlotDisposition::Repeated &&
+                slots[1].disposition == LogicalVideoSlotDisposition::Repeated &&
+                slots[2].pts_ns == 1'050 &&
+                slots[2].disposition == LogicalVideoSlotDisposition::Rendered,
+            "multiple missed deadlines must yield consecutive repeated logical slots");
+}
+
+void TestLogicalVideoSlotsRejectUnsupportedTimingTransitions() {
+    LogicalVideoSlotTimeline timeline;
+    MasterFrameTimeline master_timeline;
+    std::vector<LogicalVideoSlot> slots;
+    const MasterFrame first = Observe(master_timeline, 100);
+    Require(timeline.ObserveRenderedFrame(first, 10, slots) ==
+                LogicalVideoSlotObservationResult::Accepted,
+            "first logical slot must be accepted");
+    const MasterFrame unaligned = Observe(master_timeline, 115);
+    Require(timeline.ObserveRenderedFrame(unaligned, 10, slots) ==
+                LogicalVideoSlotObservationResult::UnalignedRenderedPts,
+            "logical slots must not be inferred across an unaligned timing transition");
+    const MasterFrame aligned = Observe(master_timeline, 120);
+    Require(timeline.ObserveRenderedFrame(aligned, 0, slots) ==
+                LogicalVideoSlotObservationResult::InvalidFrameInterval,
+            "logical slots require an explicit OBS frame interval");
+}
+
 } // namespace
 
 int main() {
@@ -149,5 +212,7 @@ int main() {
     TestRuntimeIntervalChangePreservesTimelineIdentity();
     TestTimingConfigurationTracksRuntimeIntervalChanges();
     TestExperimentalGraphicsLagInjectorIsBoundedAndDeterministic();
+    TestLogicalVideoSlotsRepresentObsRepeatedSlots();
+    TestLogicalVideoSlotsRejectUnsupportedTimingTransitions();
     return EXIT_SUCCESS;
 }
