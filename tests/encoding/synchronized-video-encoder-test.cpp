@@ -130,6 +130,28 @@ void TestNoABIdentityDrift() {
             "B result must preserve shared identity");
 }
 
+void TestInFlightPairRemainsReservedUntilBothAsyncCompletions() {
+    MasterFrameTimeline timeline;
+    const MasterFrame frame_0 = Observe(timeline, 100);
+    const MasterFrame frame_1 = Observe(timeline, 200);
+    EncodedPacketTracker tracker(1);
+    Require(tracker.Begin(frame_0, 100) == EncodedPacketTrackerResult::Accepted,
+            "an async pair must reserve both output slots together");
+    Require(tracker.Record(Packet(frame_0, OutputSlot::B, 0xB0)) == EncodedPacketTrackerResult::Accepted,
+            "one output may complete before its counterpart");
+    Require(tracker.size() == 1,
+            "the pair reservation must survive until the counterpart completion releases it");
+    Require(tracker.Begin(frame_1, 200) == EncodedPacketTrackerResult::Capacity,
+            "a later pair cannot reuse capacity after only one output completed");
+    Require(tracker.Record(Packet(frame_0, OutputSlot::A, 0xA0)) == EncodedPacketTrackerResult::Accepted,
+            "the matching completion must release the original pair by identity");
+    Require(tracker.size() == 0, "both completions must release the bounded pair reservation");
+    Require(tracker.Begin(frame_1, 200) == EncodedPacketTrackerResult::Accepted,
+            "released capacity must accept a later complete pair");
+    tracker.Reset();
+    Require(tracker.size() == 0, "shutdown reset must discard outstanding reservations explicitly");
+}
+
 } // namespace
 
 int main() {
@@ -138,5 +160,6 @@ int main() {
     TestDuplicateAndUnknownPacketsAreRejected();
     TestPacketOwnershipAndBoundedPressure();
     TestNoABIdentityDrift();
+    TestInFlightPairRemainsReservedUntilBothAsyncCompletions();
     return EXIT_SUCCESS;
 }
