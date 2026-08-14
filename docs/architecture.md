@@ -1,8 +1,8 @@
 # Architecture
 
 This document turns the product model in [`../mvp-plan.md`](../mvp-plan.md) into
-implementation boundaries. It deliberately avoids prescribing a source tree or
-specific libobs calls before those APIs have been validated.
+implementation boundaries, source organization, and architectural decisions that
+protect synchronization invariants.
 
 ## Synchronization Contract
 
@@ -64,29 +64,50 @@ when implementation needs them.
 
 ## Module-Oriented Source Layout
 
-The source root is an internal include root. Organization has two levels: module
-directories group subsystem responsibilities, and component directories group
-meaningful implementation units. For example:
+The source root is an internal include root. Organization is:
 
 ```text
-timeline/
-`-- master-frame-coordinator/
+repository
+  ↓
+module
+  ↓
+component files
+```
+
+Modules are meaningful architectural/subsystem boundaries. Components normally live
+directly inside their owning module; a module already supplies the organizational
+context. For example:
+
+```text
+src/
+|-- plugin/
+|   `-- plugin-main.cpp
+`-- timeline/
+    |-- master-frame.hpp
+    |-- master-frame-timeline.hpp
+    |-- master-frame-timeline.cpp
     |-- master-frame-coordinator.hpp
     `-- master-frame-coordinator.cpp
 ```
 
 Code includes project headers from that root, for example
-`#include "timeline/master-frame/master-frame.hpp"`; relative upward paths and
-`src/...` includes are not used. Component files retain their explicit component
-names—`index.hpp` and `index.cpp` are not used. The repetition is intentional: it
-makes search, compiler output, stack traces, and IDE navigation unambiguous even when
-the directory context is absent.
+`#include "timeline/master-frame.hpp"`; relative upward paths and `src/...` includes
+are not used. Component files retain explicit descriptive names; `index.hpp` and
+`index.cpp` are not used.
 
-Current implementations live in `src/plugin/` and component directories under
-`src/timeline/`, with tests mirroring the relevant component hierarchy under
-`tests/timeline/`. `timeline/master-frame/master-frame.hpp` owns the reusable
-immutable `MasterFrame`, `MasterFrameId`, and `MasterFramePts` domain types, so
-rendering and other consumers need not include the timeline state machine.
+Introduce a nested directory inside a module only when a concrete organizational need
+exists, such as a large subsystem with several closely related components or resources.
+Do not create a directory for every C++ class or `.hpp`/`.cpp` pair, and do not use
+redundant paths such as
+`timeline/master-frame-coordinator/master-frame-coordinator.cpp` when
+`timeline/master-frame-coordinator.cpp` is sufficient. Do not create empty future
+module or component directories.
+
+Current implementations live in `src/plugin/` and `src/timeline/`, with tests
+mirroring the module hierarchy at `tests/timeline/master-frame-timeline-test.cpp`.
+`timeline/master-frame.hpp` owns the reusable immutable `MasterFrame`,
+`MasterFrameId`, and `MasterFramePts` domain types, so rendering and other consumers
+need not include the timeline state machine.
 
 The intended modules are:
 
@@ -101,9 +122,23 @@ The intended modules are:
 | `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
 | `ui` | OBS configuration and controls without synchronization logic |
 
-Only modules and meaningful components with real implementation receive directories;
-do not create empty future-module/component folders or placeholder headers. The
-intended dependency direction is
+Future modules follow the same flat-within-module convention, for example:
+
+```text
+src/rendering/scene-renderer.hpp
+src/rendering/scene-renderer.cpp
+src/encoding/video-encoder.hpp
+src/encoding/video-encoder.cpp
+src/replay/synchronized-replay-buffer.hpp
+src/replay/synchronized-replay-buffer.cpp
+src/muxing/replay-muxer.hpp
+src/muxing/replay-muxer.cpp
+```
+
+These paths are a convention only; do not create future module directories or files
+until the corresponding implementation work begins.
+
+The intended dependency direction is
 `plugin -> timeline -> rendering -> encoding -> replay/muxing`, while `validation`
 observes relevant domains and `ui` acts as a configuration/control layer. In
 particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but

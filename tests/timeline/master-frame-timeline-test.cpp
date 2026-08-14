@@ -1,4 +1,4 @@
-#include "timeline/master-frame-timeline/master-frame-timeline.hpp"
+#include "timeline/master-frame-timeline.hpp"
 
 #include <cstdlib>
 #include <iostream>
