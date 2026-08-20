@@ -53,6 +53,88 @@ and direct mix queues are implementation details in `obs-internal.h` / private
 translation units.  The experiment neither includes private headers nor calls those
 symbols.
 
+### Submission-time association feasibility (OBS 32.2.1)
+
+The requested `EncoderInputAssociation` cannot be created by a plugin using the
+current public API.
+
+**PUBLIC API SOLUTION — lifecycle yes, generic submission association no.**
+
+`obs_output_info` exposes output `start`/`stop`, raw callbacks, and the final
+`encoded_packet` callback, but no callback around an individual encoder request
+([`libobs/obs-output.h:41-58`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.h#L41-L58)).
+`obs_output_add_packet_callback` is explicitly invoked by `send_interleaved()`
+before forwarding a packet to the output service, after the encoder has already
+received the input ([`libobs/obs.h:2162-2171`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs.h#L2162-L2171)).
+`obs_add_raw_video_callback` observes only the raw path, while
+`obs_encoder_info.encode_texture2` is an encoder implementation callback; using
+it would mean owning/replacing the encoder, which is out of scope
+([`libobs/obs.h:897-901`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs.h#L897-L901),
+[`libobs/obs-encoder.h:198-210`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.h#L198-L210),
+[`libobs/obs-encoder.h:343-349`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-encoder.h#L343-L349)).
+
+The public output extension point does solve the separate video-only lifecycle
+question. `OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED` is a valid flag combination;
+`can_begin_data_capture()` validates video and audio independently, and
+`obs_output_begin_data_capture()` initializes and starts only the flagged
+encoders ([`libobs/obs-output.c:1353-1365`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L1353-L1365),
+[`libobs/obs-output.c:2638-2655`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L2638-L2655),
+[`libobs/obs-output.c:2758-2783`](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-output.c#L2758-L2783)).
+A plugin-owned registered output can therefore call the public initialize/begin
+and end-capture functions with no audio encoder. The research `null_output`
+uses `OBS_OUTPUT_AV` only because it is an existing no-op fixture; its temporary
+AAC encoder is not required by the public video-only output contract.
+
+**MINIMAL INTERNAL DEPENDENCY — technically possible, not production-safe as a
+plugin dependency.**
+
+The smallest private fork would carry an opaque source-slot token through the
+existing submission path and invoke a callback immediately before the generic
+encoder implementation:
+
+* `libobs/obs-video.c:442-515` (`queue_frame`) must preserve a distinct token
+  when the duplicate branch increments an existing `obs_tex_frame.count`; a
+  single timestamp/count is exactly what causes the proven texture CTS alias.
+* `libobs/obs-video-gpu-encode.c:145-210` must pass that token, the selected
+  `obs_encoder_t`, `encoder->cur_pts`, composition CTS, and a monotonic request
+  token immediately before `encode_texture`/`encode_texture2`.
+* `libobs/obs-encoder.c:1585-1640` must make the same callback at the raw
+  `receive_video`/`do_encode` boundary, so raw and texture encoders expose one
+  generic contract.
+* The private `obs_vframe_info`/`obs_tex_frame` definitions in
+  `libobs/obs-internal.h:312-326` need the opaque source token (or an equivalent
+  per-count token queue).
+
+Hooking only the final GPU call is insufficient: by then the duplicate texture
+has already lost which logical slot in the `count` sequence it represents.
+This fork would have to be rebased and retested against every OBS change to
+`obs-video.c`, `obs-video-gpu-encode.c`, `obs-encoder.c`, and the internal queue
+layout, so it is a research instrument rather than a production dependency.
+
+**UPSTREAM HOOK REQUIRED — production recommendation.**
+
+Request a small public, opt-in encoder-input hook (per `obs_encoder_t` or the
+video-only `obs_output_t`) whose callback runs synchronously immediately before
+`encode`/`encode_texture2` and receives:
+
+```text
+EncoderInputAssociation {
+  source_slot_token;       // opaque core token, distinct for every logical slot
+  composition_cts_ns;
+  encoder;                 // obs_encoder_t*
+  encoder_request_token;  // stable per submission, not callback order
+  encoder_pts;
+}
+```
+
+The core must create and carry `source_slot_token` from the `count` expansion
+through both raw and texture queues. The plugin then maps that token to its
+canonical `logical_slot_id`; CTS remains the composition timestamp and native
+PTS remains only the packet-local join value. This is the smallest generic hook
+that preserves encoder choice, supports texture reuse, and does not expose or
+replace NVENC internals. It should be proposed upstream rather than maintained
+as a private libobs fork.
+
 ### Important public-lifecycle limitation
 
 There is no public direct `obs_encoder_start` API.  Native encoders must be driven
@@ -60,9 +142,10 @@ by a normal `obs_output_t`.  OBS 32.2.1's registered `null_output` is AV-only, s
 the no-file experiment attaches a stock `ffmpeg_aac` encoder to each null output
 only to satisfy its activation contract.  It writes no file, retains no packets,
 and performs no audio synchronization work; video is the only observed stream.  A
-production video-only replay integration should use a supported video-only output
-type or an OBS-supported public extension point rather than making this activation
-detail part of the architecture.
+production video-only replay integration should register its own
+`OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED` output and use the public output lifecycle;
+that removes the activation-audio workaround. This lifecycle solution does not
+remove the separate submission-association blocker above.
 
 ## Lifecycle: research activation versus target product
 
@@ -541,12 +624,24 @@ fixed probes.
 
 ## Recommendation for the main plan
 
-Replace the proposed custom Phase 4 NVENC submission/backend with a native output
-adapter owning, per fixed output slot: `obs_view_t`, returned `video_t`, one normal
-`obs_encoder_t`, and a public packet observer.  Use an encoder group for common
-activation and keep one plugin-owned `MasterFrameCoordinator` plus a bounded map
-from master CTS to immutable master identity.  Replay buffering/muxing must retain
-the packet and this explicit association, not only `encoder_packet.pts`.
+**PUBLIC API SOLUTION:** use a plugin-owned
+`OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED` output per fixed output slot, with
+`obs_view_t`, returned `video_t`, one normal `obs_encoder_t`, and the public output
+start/stop lifecycle. This is production-safe for keeping outputs inactive while
+OBS is idle, but public packet/output callbacks cannot create the required
+submission-time association for texture encoders.
+
+**MINIMAL INTERNAL DEPENDENCY:** a private libobs fork can carry an opaque source
+slot token through `obs-video.c`/`obs-video-gpu-encode.c` and invoke a common raw
+and texture input callback before the encoder implementation. It is useful for
+proving the association, but its queue-layout and symbol dependencies make it
+unsuitable as the plugin's production contract.
+
+**UPSTREAM HOOK REQUIRED:** request the small generic encoder-input hook described
+above. Once available, retain the native output adapter, encoder grouping, and
+plugin-owned `MasterFrameCoordinator`; map the hook's source token to immutable
+`logical_slot_id` and retain that association with every packet. Do not use native
+PTS or callback order as a replacement authority.
 
 Discard PR #5's `NvencVideoEncoder`, its direct D3D11/NVENC queueing, custom worker
 thread/lifetime ownership, and assumptions that completion order carries frame
@@ -566,8 +661,8 @@ diagnostics, adapting downstream records to store native packet timebase metadat
 - Run the new per-packet instrumentation through deliberate lag at 1920x1080/60
   with both `obs_nvenc_h264_tex` and `obs_x264`; do not change the production
   synchronization invariant until those raw packet sets explain the anomaly.
-- Confirm a supported production video-only output lifecycle, or document the
-  smallest accepted OBS extension point, before treating the prototype's
-  `null_output` activation detail as a production design.
+- Obtain or upstream the generic input-association hook before implementing the
+  production replay adapter; the public video-only output lifecycle is now
+  resolved, while the association blocker remains open.
 - Implement and verify Replay Buffer-owned native-output start and stop transitions
   before source teardown; the experimental environment flag is not that lifecycle.
