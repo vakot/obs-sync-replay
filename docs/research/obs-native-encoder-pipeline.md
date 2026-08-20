@@ -1,37 +1,39 @@
 # Native libobs video/encoder pipeline research
 
-Status: experimental research branch only.  Reference implementation: OBS Studio
-32.2.1 (`.deps/sources/obs-studio-32.2.1`, tag
-[`32.2.1`](https://github.com/obsproject/obs-studio/tree/32.2.1)).  This document
-does not change the production Phase 4 decision.
+Status: experimental research branch only. The original source trace and private
+prototype use OBS Studio 32.2.1 (`.deps/sources/obs-studio-32.2.1`, tag
+[`32.2.1`](https://github.com/obsproject/obs-studio/tree/32.2.1)). The final public
+hook validation uses committed OBS branch `libobs-encoder-input-association` at
+`97807bdae2c5a4bc313ae8d055de12142e2c8102`. This document does not change the
+production Phase 4 decision.
 
 ## Decision
 
-**YES, WITH A GRAPHICS-LAG BLOCKER.** Two independent selected scenes can use the
-native `obs_view_t -> video_t -> obs_encoder_t` path without weakening
-frame-boundary synchronization during the observed normal cadence, provided that
-the plugin treats the OBS composition timestamp (CTS, in nanoseconds) as its
-`MasterPTS` and validates a per-packet CTS-to-master mapping. It must not require
-the raw `encoder_packet.pts` integer to equal the nanosecond `MasterPTS` integer:
-libobs deliberately makes encoder PTS a value in the encoder timebase, beginning
-at zero for each activation.
+**YES, WITH THE PUBLIC INPUT-ASSOCIATION HOOK.** Two independent selected scenes can
+use the native `obs_view_t -> video_t -> obs_encoder_t` path while preserving
+logical-slot identity through both raw and texture encoders. The public hook carries
+an opaque `input_id` into caller-selected `association_id`, and libobs returns that
+association with `encoder_packet_time`. CTS remains observed composition timing; it
+is not required to be unique and is not repaired. Raw `encoder_packet.pts` remains
+an encoder-local presentation value rather than the master synchronization
+authority.
 
 The target invariant remains:
 
 ```text
+A[N].logical_slot_id == B[N].logical_slot_id
+A[N].association_id  == B[N].association_id
 A[N].master_frame_id == B[N].master_frame_id
-A[N].cts_ns          == B[N].cts_ns == MasterPTS[N]
 A[N].encoder_pts     == B[N].encoder_pts
 ```
 
-`encoder_pts` is not a substitute clock. It is a packet-local presentation value
-joined to the immutable master frame by CTS. Equal A/B native PTS is presently a
-**normal-cadence experimental check**, not yet a proven invariant for every lagged
-slot. The two preserved NVENC anomalies require a paired missing/duplicated-slot
-model before this path can be accepted for production replay. A later production
-replay record must store both `master_pts_ns` and native `encoder_pts`, and reject
-or explicitly represent a packet that lacks an unambiguous CTS-to-master join. It
-must not use offset correction or callback order.
+`encoder_pts` is not a substitute clock. It is packet-local timing joined to the
+immutable logical slot by the delivered association. Texture CTS may alias when OBS
+reuses a rendered composition for a repeated logical slot; distinct input
+associations preserve the two identities explicitly. A later production replay
+record must retain `logical_slot_id`, `master_pts_ns`, the association, CTS, and
+native encoder PTS. It must not use offset correction, CTS repair, or callback
+order.
 
 ## Public API surface
 
@@ -111,65 +113,37 @@ This fork would have to be rebased and retested against every OBS change to
 `obs-video.c`, `obs-video-gpu-encode.c`, `obs-encoder.c`, and the internal queue
 layout, so it is a research instrument rather than a production dependency.
 
-### Branch prototype: generic input association hook
+### Public encoder-input association hook
 
-This branch carries that fork as a bounded upstream-quality prototype. The pinned
-OBS SDK patch adds `obs_encoder_set_input_callback()` and the public
-`obs_encoder_input` / `encoder_packet_time` fields in `libobs/obs.h` and
-`libobs/obs-encoder.h`. The callback runs synchronously immediately before the
-registered encoder implementation on both paths. It receives a monotonically
-unique `request_id`, `source_frame_id`, composition CTS, and encoder-local PTS;
-the plugin may fill an opaque `association_id`, which libobs copies into the
-packet timing record. The callback does not own the encoder, block, retain the
-input pointer, or observe completion order.
+The committed OBS branch `libobs-encoder-input-association` replaces the earlier
+private research callback with the minimal public
+`obs_encoder_set_input_association_callback()` API. Immediately before invoking a
+registered raw `encode()` or texture encode implementation, libobs supplies an
+opaque `input_id` that identifies one logical input slot within that video-pipeline
+activation. The caller may return one opaque `association_id`; libobs copies the
+value into the PTS-matched `encoder_packet_time` record. Internal source and request
+identifiers, CTS, and encoder-local PTS are not exposed through the input callback.
 
-The source token is created in `video_sleep()` (`libobs/obs-video.c`), transported
-through `video_data` (`libobs/media-io/video-io.{h,c}`), copied into
-`obs_tex_frame` (`libobs/obs-internal.h`), and incremented for every repeated
-count slot, including the `encode_gpu()` count expansion in `obs-video.c`.
-`obs-video-gpu-encode.c` invokes the hook for each texture request;
-`obs-encoder.c` invokes the same hook for raw requests and records the association
-with the existing PTS-keyed timing entry. Consequently the 40 ms texture case
-can retain two requests with the aliased rendered CTS while still identifying
-their distinct logical source slots. The plugin's `InputCallback()` maps the
-source sequence to its immutable `logical_slot_id`; packet validation then joins
-by that association, treating CTS aliasing as observed evidence rather than
-inventing a corrected timestamp.
+The plugin uses `input_id` itself as the association token. At packet delivery it
+recovers that exact value from `encoder_packet_time`, maps the input sequence to the
+canonical `LogicalVideoSlot` sequence, and validates A/B independently of callback
+arrival order. The `count > 1` raw and texture paths advance `input_id` for each
+logical request, so two texture requests may retain the same rendered CTS while
+carrying distinct associations. CTS is logged as composition evidence and is never
+rewritten to manufacture the repeated slot's timestamp.
 
-This is intentionally a private, pinned-OBS research patch, not a production
-plugin dependency. It changes the libobs public ABI and requires rebuilding the
-SDK; the patch is applied by `cmake/ObsSdk.cmake` and marked in the local SDK
-stamp. The exact maintenance surface is the eight files named above plus the
-patch application step. The production recommendation remains **UPSTREAM HOOK
-REQUIRED**: upstream the smallest opt-in equivalent (preferably with an opaque
-core token and packet timing association) and consume it only after API/ABI and
-threading semantics are reviewed by OBS. The video-only output lifecycle can be
-used independently through the public `OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED`
-output contract; Replay Buffer frontend integration is still not implemented.
+The public setter is opt-in, synchronized with encoder activation, and requires no
+private libobs headers. Video-only encoded outputs also receive packet timing through
+their packet callbacks, with per-output packet/timing isolation. Replay Buffer
+frontend integration is still not implemented. The remaining upstream gate is OBS
+review and acceptance of this public API, not a missing technical association path.
 
-**UPSTREAM HOOK REQUIRED — production recommendation.**
+**UPSTREAM REVIEW REQUIRED — production recommendation.**
 
-Request a small public, opt-in encoder-input hook (per `obs_encoder_t` or the
-video-only `obs_output_t`) whose callback runs synchronously immediately before
-`encode`/`encode_texture2` and receives:
-
-```text
-EncoderInputAssociation {
-  source_slot_token;       // opaque core token, distinct for every logical slot
-  composition_cts_ns;
-  encoder;                 // obs_encoder_t*
-  encoder_request_token;  // stable per submission, not callback order
-  encoder_pts;
-}
-```
-
-The core must create and carry `source_slot_token` from the `count` expansion
-through both raw and texture queues. The plugin then maps that token to its
-canonical `logical_slot_id`; CTS remains the composition timestamp and native
-PTS remains only the packet-local join value. This is the smallest generic hook
-that preserves encoder choice, supports texture reuse, and does not expose or
-replace NVENC internals. It should be proposed upstream rather than maintained
-as a private libobs fork.
+The generic hook is implemented and runtime-validated on the committed OBS branch.
+It should be proposed upstream as the supported production contract. Until it is
+accepted, the plugin retains a patched-OBS build dependency; no private libobs
+headers or codec-specific encoder implementation are required.
 
 ### Important public-lifecycle limitation
 
@@ -382,13 +356,12 @@ reused composition. The output callback may use the request token only to recove
 that already-created association; neither native PTS nor callback order may create
 or replace the canonical slot identity.
 
-OBS's public packet callback exposes only native PTS and CTS, not this queue decision,
-the private `count`, or a source-supplied logical-slot tag. Therefore the current
-plugin cannot safely infer the missing `X + Δ` association for texture encoders.
-It continues to retain the bounded same-CTS packet set as an explicit unsupported
-lag condition. Implementing a correct association requires a supported libobs
-association hook (or plugin-owned submission boundary) before this native path can
-meet the production replay guarantee.
+Stock OBS 32.2.1 packet callbacks exposed only native PTS and CTS, not this queue
+decision, the private `count`, or a caller-defined logical-slot tag. The public
+association hook on the committed patched branch now exposes an opaque `input_id`
+at submission and returns its caller association with packet timing. This resolves
+the missing texture association without inferring identity from CTS or callback
+order.
 
 ### Research instrumentation and production direction
 
@@ -400,10 +373,10 @@ single-packet PTS mismatch emits one structured record containing all observed A
 and B packets for that CTS. Timeline logs carry previous master PTS, configured
 interval, cadence delta, and lagged-frame count.
 
-This is instrumentation only: it does not pair by arrival order, repair PTS,
-rewrite CTS, fabricate MasterFrames, or silently discard extra packets. The bounded
-diagnostic remains the correct behavior until a supported association hook supplies
-the exact texture-submission decision.
+This instrumentation does not pair by arrival order, repair PTS, rewrite CTS,
+fabricate MasterFrames, or silently discard extra packets. With the public hook, the
+bounded packet records validate the exact submission association instead of treating
+same-CTS observations as unresolved identity.
 
 ### Deterministic graphics-lag reproduction
 
@@ -615,7 +588,8 @@ master_frame_id=900 master_pts=73233176488822 encoder_pts=839 ... validation=ok
 The run lasted 614 seconds, remained responsive, and produced 122 sampled successful
 normal-cadence single-packet validations. The smaller encoder PTS is expected:
 activation begins after the master session and encoder PTS is in 1/60-second units.
-It was not a graphics-lag stress test and does not prove the unresolved lag model.
+It was not a graphics-lag stress test; the later public-hook validation supplies
+that evidence.
 
 ### NVENC — PROVEN normal-cadence run (10 minutes)
 
@@ -659,58 +633,51 @@ probe also exited with code 0 and logged neither a native-output start nor teard
 The runtime logs are the acceptance evidence; no crash report was generated by the
 fixed probes.
 
-### PR #7 — patched-OBS end-to-end association validation (2026-08-20)
+### Upstream-quality public-hook runtime validation (2026-08-20)
 
-The patched OBS 32.2.1 runtime and the current plugin were deployed together and
-exercised at 1920x1080/60 with a 40 ms graphics delay every 600 master frames.
-Both encoders ran past the required ten real lag events:
+The exact committed OBS branch `libobs-encoder-input-association` at
+`97807bdae2c5a4bc313ae8d055de12142e2c8102` was built as an isolated Release runtime,
+and the plugin was rebuilt against that runtime's public SDK. Tests ran at
+1920x1080/60 with deterministic 40 ms graphics-lag injection every 600 master frames
+and covered at least ten real lag events per encoder.
 
-* `obs_nvenc_h264_tex`: 12+ lag boundaries. At every preserved CTS-alias boundary,
-  A and B packet callbacks recovered the same `logical_slot_id`, `source_frame_id`,
-  `request_id`, packet CTS, and local encoder PTS even when callback order differed.
-  The packet-set records retain the alias; no CTS repair, callback-order inference,
-  or PTS offset was applied. The ordered A/B logical-slot sets remained equal and
-  normal cadence resumed after each event.
-* `obs_x264`: 14 lag boundaries with zero CTS aliases, zero deferred/missing
-  associations, and 45 successful A/B single-packet validations. The same
-  submission hook works through the raw path unchanged.
+* `obs_nvenc_h264_tex`: repeated logical slots reproduced the known texture CTS
+  alias. The two aliased-CTS submissions carried distinct public `input_id` values
+  and therefore distinct caller `association_id` values. Packet delivery recovered
+  those exact associations through `encoder_packet_time`; A and B resolved to the
+  same ordered `LogicalVideoSlot` sequence, and normal cadence resumed without
+  accumulating drift.
+* `obs_x264`: the same public callback and packet-time association worked unchanged
+  through the raw path. Repeated logical slots retained distinct input associations,
+  A/B association validation remained equal, and no drift accumulated.
 
-The first x264 deployment exposed and fixed one propagation omission in the patched
-runtime: `output_frame()` now copies `vframe_info.source_frame_id` into the raw
-`video_data` before `video_output_lock_frame2`. The rerun is the acceptance result;
-the earlier `source_frame_id=0` run is not treated as passing evidence.
-
-Program scene switching was exercised through the OBS frontend while the x264
-experiment was active (`Gameplay Test` → `Camera Test` → `Combined Reference` →
-`Gameplay Test`). Each request succeeded, and A/B validation continued with no
-association error or drift. This is runtime evidence only; Replay Buffer frontend
-integration is not implemented.
-
-These runs prove that the proposed hook closes the encoder-association blocker
-*technically* for both raw and texture encoders on the pinned patched OBS 32.2.1
-runtime. It is still not a production contract until the hook is upstreamed (or an
-equivalent supported API is provided).
+Neither run used callback arrival order, CTS repair, or inferred PTS offsets. Program
+scene switching was exercised while the native outputs were active and did not alter
+the independent views or A/B validation. Both encoders also completed clean normal
+shutdown tests. This closes the technical encoder-association blocker for raw and
+texture encoders on the exact patched commit. Replay Buffer frontend integration is
+still not implemented, and the API remains a patched-build dependency until accepted
+upstream.
 
 ## Recommendation for the main plan
 
-**PUBLIC API SOLUTION:** use a plugin-owned
+**PUBLIC API SOLUTION — validated on the proposed OBS branch:** use a plugin-owned
 `OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED` output per fixed output slot, with
-`obs_view_t`, returned `video_t`, one normal `obs_encoder_t`, and the public output
-start/stop lifecycle. This is production-safe for keeping outputs inactive while
-OBS is idle, but public packet/output callbacks cannot create the required
-submission-time association for texture encoders.
+`obs_view_t`, returned `video_t`, one normal `obs_encoder_t`, the public output
+start/stop lifecycle, and `obs_encoder_set_input_association_callback()`. Recover the
+opaque association from `encoder_packet_time` in the output packet callback. This
+keeps outputs inactive while OBS is idle and supports raw and texture encoders
+without dummy audio or private headers.
 
-**MINIMAL INTERNAL DEPENDENCY:** a private libobs fork can carry an opaque source
-slot token through `obs-video.c`/`obs-video-gpu-encode.c` and invoke a common raw
-and texture input callback before the encoder implementation. It is useful for
-proving the association, but its queue-layout and symbol dependencies make it
-unsuitable as the plugin's production contract.
+**MINIMAL INTERNAL DEPENDENCY — historical prototype only:** the private OBS 32.2.1
+fork proved the required propagation boundary, but its private callback and queue
+identifiers are no longer the production recommendation.
 
-**UPSTREAM HOOK REQUIRED:** request the small generic encoder-input hook described
-above. Once available, retain the native output adapter, encoder grouping, and
-plugin-owned `MasterFrameCoordinator`; map the hook's source token to immutable
-`logical_slot_id` and retain that association with every packet. Do not use native
-PTS or callback order as a replacement authority.
+**UPSTREAM REVIEW REQUIRED:** propose the generic public hook and video-only timing
+delivery for OBS acceptance. Retain the native output adapter, encoder grouping, and
+plugin-owned `MasterFrameCoordinator`; map opaque input identity to immutable
+`logical_slot_id`. Do not use native PTS, CTS uniqueness, or callback order as a
+replacement authority.
 
 Discard PR #5's `NvencVideoEncoder`, its direct D3D11/NVENC queueing, custom worker
 thread/lifetime ownership, and assumptions that completion order carries frame
@@ -719,13 +686,13 @@ diagnostics, adapting downstream records to store native packet timebase metadat
 
 ## Remaining gates
 
-- Repeat the runtime matrix on additional GPUs/driver versions before treating the
-  private hook as production-ready.
-- Exercise graphics lag deliberately and prove the production missing-slot policy
-  handles every packet set unambiguously, including repeated/missing slots and
-  same-CTS multiple observations.
-- Obtain or upstream the generic input-association hook before implementing the
-  production replay adapter. The public video-only output lifecycle is resolved,
-  while the current private dependency remains a release gate.
+- Submit, review, and obtain acceptance of the generic public input-association hook;
+  until then, the patched OBS runtime remains a release gate.
+- Repeat the runtime matrix on additional GPUs and driver versions as broader
+  compatibility evidence; the validated hardware run already closes the association
+  design blocker.
+- Define and validate the production missing-slot policy for truly missing encoder
+  packets. Repeated texture slots and same-CTS observations are now associated
+  explicitly and are no longer ambiguous.
 - Implement and verify Replay Buffer-owned native-output start and stop transitions
   before source teardown; the experimental environment flag is not that lifecycle.
