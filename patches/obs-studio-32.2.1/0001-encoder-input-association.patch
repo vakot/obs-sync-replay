@@ -405,6 +405,20 @@ index eca6f83..36e0885 100644
  
  	pthread_mutex_lock(&video->encoder_group_mutex);
  	for (size_t i = 0; i < video->ready_encoder_groups.num; i++) {
+@@ -909,6 +912,7 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 		deque_pop_front(&video->vframe_info_buffer, &vframe_info, sizeof(vframe_info));
+ 
+ 		frame.timestamp = vframe_info.timestamp;
++		frame.source_frame_id = vframe_info.source_frame_id;
+ 		profile_start(output_frame_output_video_data_name);
+ 		output_video_data(video, &frame, vframe_info.count);
+ 		profile_end(output_frame_output_video_data_name);
+	}
+ 
+ 	if (++video->cur_texture == NUM_TEXTURES)
+ 		video->cur_texture = 0;
+}
+
 diff --git a/libobs/obs.h b/libobs/obs.h
 index 4e51eb4..9c68a36 100644
 --- a/libobs/obs.h
