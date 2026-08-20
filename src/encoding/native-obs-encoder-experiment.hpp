@@ -11,7 +11,6 @@
 
 struct encoder_packet;
 struct encoder_packet_time;
-struct obs_encoder_input;
 struct obs_encoder;
 struct obs_encoder_group;
 struct obs_output;
@@ -60,8 +59,7 @@ class NativeObsEncoderExperiment final {
         bool has_previous_packet = false;
         int64_t previous_packet_pts = 0;
         uint64_t previous_cts = 0;
-        uint64_t source_frame_id = 0;
-        uint64_t request_id = 0;
+        uint64_t input_id = 0;
         uint64_t association_id = 0;
         bool has_association = false;
     };
@@ -84,9 +82,9 @@ class NativeObsEncoderExperiment final {
 
     static void PacketCallback(obs_output_t* output, struct encoder_packet* packet,
                                struct encoder_packet_time* packet_time, void* parameter);
-    static void InputCallback(obs_encoder_t* encoder, struct obs_encoder_input* input,
-                              void* parameter);
-    void ObserveInput(Output output, struct obs_encoder_input& input);
+    static bool InputAssociationCallback(obs_encoder_t* encoder, uint64_t input_id,
+                                         uint64_t* association_id, void* parameter);
+    bool AssociateInput(Output output, uint64_t input_id, uint64_t& association_id);
     void ObservePacket(Output output, const struct encoder_packet& packet,
                        const struct encoder_packet_time* packet_time);
 
@@ -116,8 +114,8 @@ class NativeObsEncoderExperiment final {
     std::map<detail::LogicalVideoSlotId, PacketSet> packet_sets_;
     std::array<PacketObservation, 2> previous_packets_{};
     std::array<bool, 2> has_previous_packets_{};
-    bool source_slot_origin_set_ = false;
-    uint64_t source_slot_origin_ = 0;
+    bool input_slot_origin_set_ = false;
+    uint64_t input_slot_origin_ = 0;
     detail::LogicalVideoSlotId logical_slot_origin_ = 0;
     bool running_ = false;
 };

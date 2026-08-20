@@ -1,5 +1,26 @@
 include_guard(GLOBAL)
 
+set(OBS_SYNC_REPLAY_OBS_SDK_ROOT
+    ""
+    CACHE PATH
+    "Path to an existing OBS development SDK"
+)
+set(OBS_SYNC_REPLAY_OBS_DEPS_ROOT
+    ""
+    CACHE PATH
+    "Path to the matching OBS dependencies"
+)
+
+if(OBS_SYNC_REPLAY_OBS_SDK_ROOT)
+    list(PREPEND CMAKE_PREFIX_PATH "${OBS_SYNC_REPLAY_OBS_SDK_ROOT}")
+    if(OBS_SYNC_REPLAY_OBS_DEPS_ROOT)
+        list(PREPEND CMAKE_PREFIX_PATH "${OBS_SYNC_REPLAY_OBS_DEPS_ROOT}")
+    endif()
+    find_package(libobs CONFIG REQUIRED)
+    find_package(obs-frontend-api CONFIG REQUIRED)
+    return()
+endif()
+
 set(OBS_SDK_VERSION "32.2.1")
 set(OBS_DEPS_VERSION "2026-07-15")
 
