@@ -12,6 +12,8 @@ set(_obs_deps_dir "${_obs_source_dir}/.deps/obs-deps-${OBS_DEPS_VERSION}-x64")
 set(_obs_build_dir "${_obs_workspace}/obs-studio-${OBS_SDK_VERSION}-build-x64")
 set(_obs_install_dir "${_obs_workspace}/obs-sdk-${OBS_SDK_VERSION}-x64")
 set(_obs_sdk_stamp "${_obs_install_dir}/.obs-sync-replay-sdk-complete")
+set(_obs_association_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/obs-studio-32.2.1/0001-encoder-input-association.patch")
+set(_obs_association_marker "${_obs_source_dir}/.obs-sync-replay-encoder-input-association")
 
 function(_obs_sync_replay_download url output_path expected_sha256)
   if(EXISTS "${output_path}")
@@ -39,17 +41,53 @@ function(_obs_sync_replay_download url output_path expected_sha256)
   endif()
 endfunction()
 
-if(NOT EXISTS "${_obs_sdk_stamp}")
+if(NOT EXISTS "${_obs_source_dir}/CMakeLists.txt")
   set(_obs_source_archive "${_obs_downloads}/obs-studio-${OBS_SDK_VERSION}.zip")
   _obs_sync_replay_download(
     "https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_SDK_VERSION}.zip"
     "${_obs_source_archive}"
     "${_obs_source_sha256}"
   )
-  if(NOT EXISTS "${_obs_source_dir}/CMakeLists.txt")
-    file(MAKE_DIRECTORY "${_obs_sources}")
-    file(ARCHIVE_EXTRACT INPUT "${_obs_source_archive}" DESTINATION "${_obs_sources}")
+  file(MAKE_DIRECTORY "${_obs_sources}")
+  file(ARCHIVE_EXTRACT INPUT "${_obs_source_archive}" DESTINATION "${_obs_sources}")
+endif()
+if(NOT EXISTS "${_obs_association_marker}")
+  execute_process(
+    COMMAND git -C "${_obs_source_dir}" apply --check --ignore-space-change --ignore-whitespace --whitespace=nowarn "${_obs_association_patch}"
+    RESULT_VARIABLE _obs_association_check_result
+  )
+  if(_obs_association_check_result EQUAL 0)
+    execute_process(
+      COMMAND git -C "${_obs_source_dir}" apply --ignore-space-change --ignore-whitespace --whitespace=nowarn "${_obs_association_patch}"
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+  else()
+    execute_process(
+      COMMAND git -C "${_obs_source_dir}" apply --reverse --check --ignore-space-change --ignore-whitespace --whitespace=nowarn "${_obs_association_patch}"
+      RESULT_VARIABLE _obs_association_reverse_check_result
+    )
+    if(NOT _obs_association_reverse_check_result EQUAL 0)
+      message(FATAL_ERROR "Pinned OBS source is neither clean nor already patched for encoder input association")
+    endif()
   endif()
+  file(WRITE "${_obs_association_marker}" "OBS ${OBS_SDK_VERSION}; encoder-input-association=1\n")
+endif()
+
+set(_obs_sdk_needs_build TRUE)
+if(EXISTS "${_obs_sdk_stamp}")
+  file(READ "${_obs_sdk_stamp}" _obs_sdk_stamp_content)
+  if(_obs_sdk_stamp_content MATCHES "encoder-input-association=1")
+    set(_obs_sdk_needs_build FALSE)
+  endif()
+endif()
+
+if(_obs_sdk_needs_build)
+  set(_obs_source_archive "${_obs_downloads}/obs-studio-${OBS_SDK_VERSION}.zip")
+  _obs_sync_replay_download(
+    "https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_SDK_VERSION}.zip"
+    "${_obs_source_archive}"
+    "${_obs_source_sha256}"
+  )
   set(
     _obs_configure_command
     "${CMAKE_COMMAND}"
@@ -89,7 +127,8 @@ if(NOT EXISTS "${_obs_sdk_stamp}")
     )
   endforeach()
 
-  file(WRITE "${_obs_sdk_stamp}" "OBS ${OBS_SDK_VERSION}; obs-deps ${OBS_DEPS_VERSION}\n")
+  file(WRITE "${_obs_sdk_stamp}"
+       "OBS ${OBS_SDK_VERSION}; obs-deps ${OBS_DEPS_VERSION}; encoder-input-association=1\n")
 endif()
 
 list(PREPEND CMAKE_PREFIX_PATH "${_obs_install_dir}" "${_obs_deps_dir}")

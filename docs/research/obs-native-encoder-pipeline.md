@@ -111,6 +111,42 @@ This fork would have to be rebased and retested against every OBS change to
 `obs-video.c`, `obs-video-gpu-encode.c`, `obs-encoder.c`, and the internal queue
 layout, so it is a research instrument rather than a production dependency.
 
+### Branch prototype: generic input association hook
+
+This branch carries that fork as a bounded upstream-quality prototype. The pinned
+OBS SDK patch adds `obs_encoder_set_input_callback()` and the public
+`obs_encoder_input` / `encoder_packet_time` fields in `libobs/obs.h` and
+`libobs/obs-encoder.h`. The callback runs synchronously immediately before the
+registered encoder implementation on both paths. It receives a monotonically
+unique `request_id`, `source_frame_id`, composition CTS, and encoder-local PTS;
+the plugin may fill an opaque `association_id`, which libobs copies into the
+packet timing record. The callback does not own the encoder, block, retain the
+input pointer, or observe completion order.
+
+The source token is created in `video_sleep()` (`libobs/obs-video.c`), transported
+through `video_data` (`libobs/media-io/video-io.{h,c}`), copied into
+`obs_tex_frame` (`libobs/obs-internal.h`), and incremented for every repeated
+count slot, including the `encode_gpu()` count expansion in `obs-video.c`.
+`obs-video-gpu-encode.c` invokes the hook for each texture request;
+`obs-encoder.c` invokes the same hook for raw requests and records the association
+with the existing PTS-keyed timing entry. Consequently the 40 ms texture case
+can retain two requests with the aliased rendered CTS while still identifying
+their distinct logical source slots. The plugin's `InputCallback()` maps the
+source sequence to its immutable `logical_slot_id`; packet validation then joins
+by that association, treating CTS aliasing as observed evidence rather than
+inventing a corrected timestamp.
+
+This is intentionally a private, pinned-OBS research patch, not a production
+plugin dependency. It changes the libobs public ABI and requires rebuilding the
+SDK; the patch is applied by `cmake/ObsSdk.cmake` and marked in the local SDK
+stamp. The exact maintenance surface is the eight files named above plus the
+patch application step. The production recommendation remains **UPSTREAM HOOK
+REQUIRED**: upstream the smallest opt-in equivalent (preferably with an opaque
+core token and packet timing association) and consume it only after API/ABI and
+threading semantics are reviewed by OBS. The video-only output lifecycle can be
+used independently through the public `OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED`
+output contract; Replay Buffer frontend integration is still not implemented.
+
 **UPSTREAM HOOK REQUIRED — production recommendation.**
 
 Request a small public, opt-in encoder-input hook (per `obs_encoder_t` or the

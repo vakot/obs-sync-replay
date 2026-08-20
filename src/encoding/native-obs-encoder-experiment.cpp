@@ -3,6 +3,7 @@
 #include <obs-module.h>
 
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -123,6 +124,7 @@ void NativeObsEncoderExperiment::ObserveMasterFrame(const MasterFrame& frame) {
                  static_cast<unsigned long long>(slot.slot_id));
             continue;
         }
+        logical_slots_by_id_.emplace(slot.slot_id, canonical);
         if (slot.disposition == detail::LogicalVideoSlotDisposition::Repeated) {
             blog(LOG_WARNING,
                  "[native-encoder-experiment] OBS logical repeated slot slot_id=%llu slot_pts=%llu "
@@ -134,6 +136,78 @@ void NativeObsEncoderExperiment::ObserveMasterFrame(const MasterFrame& frame) {
         }
     }
     TrimObservationWindows();
+}
+
+void NativeObsEncoderExperiment::InputCallback(obs_encoder_t*, struct obs_encoder_input* input,
+                                               void* parameter) {
+    auto* state = static_cast<OutputState*>(parameter);
+    if (!state || !state->experiment || !input) {
+        return;
+    }
+    state->experiment->ObserveInput(state->output, *input);
+}
+
+void NativeObsEncoderExperiment::ObserveInput(Output output, struct obs_encoder_input& input) {
+    std::lock_guard<std::mutex> lock(observations_mutex_);
+    if (!running_) {
+        return;
+    }
+
+    const auto by_cts = logical_slots_by_pts_.find(input.composition_cts);
+    if (!source_slot_origin_set_) {
+        if (by_cts == logical_slots_by_pts_.end()) {
+            blog(LOG_WARNING,
+                 "[native-encoder-experiment] input association deferred output=%s "
+                 "source_frame_id=%llu request_id=%llu CTS=%llu reason=slot-not-observed",
+                 OutputName(output), static_cast<unsigned long long>(input.source_frame_id),
+                 static_cast<unsigned long long>(input.request_id),
+                 static_cast<unsigned long long>(input.composition_cts));
+            return;
+        }
+        source_slot_origin_set_ = true;
+        source_slot_origin_ = input.source_frame_id;
+        logical_slot_origin_ = by_cts->second.slot_id;
+    }
+
+    if (input.source_frame_id < source_slot_origin_) {
+        blog(LOG_ERROR,
+             "[native-encoder-experiment] input association rejected output=%s "
+             "source_frame_id=%llu origin=%llu request_id=%llu reason=source-regression",
+             OutputName(output), static_cast<unsigned long long>(input.source_frame_id),
+             static_cast<unsigned long long>(source_slot_origin_),
+             static_cast<unsigned long long>(input.request_id));
+        return;
+    }
+
+    const uint64_t delta = input.source_frame_id - source_slot_origin_;
+    if (delta > std::numeric_limits<detail::LogicalVideoSlotId>::max() - logical_slot_origin_) {
+        return;
+    }
+    const detail::LogicalVideoSlotId slot_id = logical_slot_origin_ + delta;
+    const auto slot = logical_slots_by_id_.find(slot_id);
+    if (slot == logical_slots_by_id_.end()) {
+        blog(LOG_WARNING,
+             "[native-encoder-experiment] input association deferred output=%s "
+             "source_frame_id=%llu logical_slot_id=%llu request_id=%llu CTS=%llu "
+             "reason=slot-not-observed",
+             OutputName(output), static_cast<unsigned long long>(input.source_frame_id),
+             static_cast<unsigned long long>(slot_id),
+             static_cast<unsigned long long>(input.request_id),
+             static_cast<unsigned long long>(input.composition_cts));
+        return;
+    }
+
+    input.association_id = slot_id;
+    input.has_association = true;
+    blog(LOG_DEBUG,
+         "[native-encoder-experiment] input association output=%s source_frame_id=%llu "
+         "logical_slot_id=%llu request_id=%llu encoder_pts=%lld CTS=%llu disposition=%s",
+         OutputName(output), static_cast<unsigned long long>(input.source_frame_id),
+         static_cast<unsigned long long>(slot_id), static_cast<unsigned long long>(input.request_id),
+         static_cast<long long>(input.encoder_pts),
+         static_cast<unsigned long long>(input.composition_cts),
+         slot->second.disposition == detail::LogicalVideoSlotDisposition::Repeated ? "repeated"
+                                                                                      : "rendered");
 }
 
 void NativeObsEncoderExperiment::PacketCallback(obs_output_t*, struct encoder_packet* packet,
@@ -171,23 +245,35 @@ void NativeObsEncoderExperiment::ObservePacket(
         return;
     }
 
-    const auto logical_slot = logical_slots_by_pts_.find(packet_time->cts);
-    if (logical_slot == logical_slots_by_pts_.end()) {
+    if (!packet_time->has_association) {
         blog(LOG_ERROR,
-             "[native-encoder-experiment] invariant=3 output=%s packet_pts=%lld CTS=%llu has no "
-             "known OBS logical slot",
+             "[native-encoder-experiment] invariant=8 output=%s packet_pts=%lld CTS=%llu "
+             "missing submission association",
              OutputName(output), static_cast<long long>(packet.pts),
              static_cast<unsigned long long>(packet_time->cts));
         return;
     }
-    if (logical_slot->second.pts_ns != packet_time->cts) {
+
+    const auto logical_slot = logical_slots_by_id_.find(packet_time->association_id);
+    if (logical_slot == logical_slots_by_id_.end()) {
         blog(LOG_ERROR,
-             "[native-encoder-experiment] invariant=3 output=%s logical_slot_id=%llu "
-             "slot_pts=%llu CTS=%llu mismatch",
+             "[native-encoder-experiment] invariant=3 output=%s packet_pts=%lld CTS=%llu "
+             "association_id=%llu has no known OBS logical slot",
+             OutputName(output), static_cast<long long>(packet.pts),
+             static_cast<unsigned long long>(packet_time->cts),
+             static_cast<unsigned long long>(packet_time->association_id));
+        return;
+    }
+    if (logical_slot->second.pts_ns != packet_time->cts) {
+        blog(LOG_INFO,
+             "[native-encoder-experiment] input association resolves CTS alias output=%s "
+             "logical_slot_id=%llu slot_pts=%llu packet_CTS=%llu source_frame_id=%llu "
+             "request_id=%llu",
              OutputName(output), static_cast<unsigned long long>(logical_slot->second.slot_id),
              static_cast<unsigned long long>(logical_slot->second.pts_ns),
-             static_cast<unsigned long long>(packet_time->cts));
-        return;
+             static_cast<unsigned long long>(packet_time->cts),
+             static_cast<unsigned long long>(packet_time->source_frame_id),
+             static_cast<unsigned long long>(packet_time->request_id));
     }
 
     PacketSet& packet_set =
@@ -196,10 +282,18 @@ void NativeObsEncoderExperiment::ObservePacket(
     const size_t output_index = OutputIndex(output);
     std::vector<PacketObservation>& observations = packet_set.outputs[output_index];
     const PacketObservation& previous = previous_packets_[output_index];
-    const PacketObservation observation{packet.pts,          packet.dts,
-                                        packet.keyframe,     packet_time->cts,
-                                        observations.size(), has_previous_packets_[output_index],
-                                        previous.packet_pts, previous.cts};
+    const PacketObservation observation{packet.pts,
+                                        packet.dts,
+                                        packet.keyframe,
+                                        packet_time->cts,
+                                        observations.size(),
+                                        has_previous_packets_[output_index],
+                                        previous.packet_pts,
+                                        previous.cts,
+                                        packet_time->source_frame_id,
+                                        packet_time->request_id,
+                                        packet_time->association_id,
+                                        packet_time->has_association};
     observations.push_back(observation);
     previous_packets_[output_index] = observation;
     has_previous_packets_[output_index] = true;
@@ -207,7 +301,8 @@ void NativeObsEncoderExperiment::ObservePacket(
     blog(LOG_DEBUG,
          "[native-encoder-experiment] packet output=%s packet_pts=%lld packet_dts=%lld CTS=%llu "
          "keyframe=%d logical_slot_id=%llu slot_pts=%llu disposition=%s rendered_frame_id=%llu "
-         "rendered_pts=%llu observation_index=%llu "
+         "rendered_pts=%llu source_frame_id=%llu request_id=%llu association_id=%llu "
+         "observation_index=%llu "
          "previous_packet_pts=%lld previous_cts=%llu has_previous=%d",
          OutputName(output), static_cast<long long>(observation.packet_pts),
          static_cast<long long>(observation.packet_dts),
@@ -219,6 +314,9 @@ void NativeObsEncoderExperiment::ObservePacket(
              : "rendered",
          static_cast<unsigned long long>(packet_set.canonical.rendered_frame_id),
          static_cast<unsigned long long>(packet_set.canonical.rendered_pts_ns),
+         static_cast<unsigned long long>(observation.source_frame_id),
+         static_cast<unsigned long long>(observation.request_id),
+         static_cast<unsigned long long>(observation.association_id),
          static_cast<unsigned long long>(observation.observation_index),
          static_cast<long long>(observation.previous_packet_pts),
          static_cast<unsigned long long>(observation.previous_cts),
@@ -301,8 +399,10 @@ void NativeObsEncoderExperiment::LogPacketSet(const PacketSet& packet_set,
             }
             message << "{index=" << observation.observation_index
                     << " pts=" << observation.packet_pts << " dts=" << observation.packet_dts
-                    << " cts=" << observation.cts << " keyframe=" << (observation.keyframe ? 1 : 0)
-                    << '}';
+                    << " cts=" << observation.cts << " source_frame_id="
+                    << observation.source_frame_id << " request_id=" << observation.request_id
+                    << " association_id=" << observation.association_id
+                    << " keyframe=" << (observation.keyframe ? 1 : 0) << '}';
         }
         message << ']';
     }
@@ -311,7 +411,9 @@ void NativeObsEncoderExperiment::LogPacketSet(const PacketSet& packet_set,
 
 void NativeObsEncoderExperiment::TrimObservationWindows() {
     while (logical_slots_by_pts_.size() > kObservationWindowCapacity) {
-        logical_slots_by_pts_.erase(logical_slots_by_pts_.begin());
+        const auto iterator = logical_slots_by_pts_.begin();
+        logical_slots_by_id_.erase(iterator->second.slot_id);
+        logical_slots_by_pts_.erase(iterator);
     }
     while (packet_sets_.size() > kObservationWindowCapacity) {
         packet_sets_.erase(packet_sets_.begin());
@@ -362,6 +464,12 @@ bool NativeObsEncoderExperiment::CreateEncoderAndOutput(const Output output) {
         return false;
     }
     obs_encoder_set_video(encoders_[index], videos_[index]);
+    if (!obs_encoder_set_input_callback(encoders_[index], InputCallback, &output_states_[index])) {
+        blog(LOG_ERROR,
+             "[native-encoder-experiment] failed to install input association callback output=%s",
+             OutputName(output));
+        return false;
+    }
 
     // OBS's shipped null_output is AV-only. This stock encoder exists only to
     // activate that public output lifecycle; the experiment never retains,
@@ -497,8 +605,12 @@ void NativeObsEncoderExperiment::ReleaseResources() {
     logical_slot_timeline_.Reset();
     logical_slots_by_pts_.clear();
     packet_sets_.clear();
+    logical_slots_by_id_.clear();
     previous_packets_.fill({});
     has_previous_packets_.fill(false);
+    source_slot_origin_set_ = false;
+    source_slot_origin_ = 0;
+    logical_slot_origin_ = 0;
 
     if (was_running) {
         blog(LOG_INFO, "[native-encoder-experiment] stop complete");
