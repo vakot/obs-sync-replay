@@ -14,6 +14,10 @@ struct PacketStreamConfig final {
     int32_t timebase_num = 0;
     int32_t timebase_den = 0;
     std::vector<uint8_t> extra_data;
+    // The sink may retain only this much compressed data while ordering DTS
+    // within one committed source-CTS batch.
+    size_t muxer_tail_capacity_bytes = 1 * 1024 * 1024;
+    uint64_t muxer_reorder_safety_cts = 2'000'000'000;
 };
 
 class SynchronizedPacketSink {

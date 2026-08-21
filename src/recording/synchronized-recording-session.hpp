@@ -30,6 +30,7 @@ enum class SynchronizedRecordingFailure : uint8_t {
     StartTimeout,
     PacketTiming,
     DuplicateSourceCts,
+    LatePacket,
     BufferCapacity,
     SinkOpen,
     SinkWrite,
@@ -41,6 +42,14 @@ enum class SynchronizedRecordingFailure : uint8_t {
 struct SynchronizedRecordingConfig final {
     size_t pre_roll_capacity_bytes = 2 * 1024 * 1024;
     size_t tail_capacity_bytes = 4 * 1024 * 1024;
+    // The callback contract permits completion reordering only within this
+    // source-CTS window. A packet older than a committed watermark is a hard
+    // failure; it must never be silently inserted after muxing advanced.
+    uint64_t reorder_safety_cts = 2'000'000'000;
+    // Zero infers the common cadence from the first paired packets. The OBS
+    // runtime supplies obs_get_frame_interval_ns() so an initially sparse or
+    // reordered encoder queue cannot teach the session a false cadence.
+    uint64_t expected_source_cts_step = 0;
     uint64_t max_start_wait_cts = 2'000'000'000;
 };
 
@@ -54,6 +63,9 @@ struct SynchronizedRecordingMetrics final {
     size_t tail_bytes_a = 0;
     size_t tail_bytes_b = 0;
     size_t peak_retained_bytes = 0;
+    size_t peak_tail_bytes_a = 0;
+    size_t peak_tail_bytes_b = 0;
+    uint64_t committed_watermark_cts = 0;
     uint64_t common_start_cts = 0;
     uint64_t common_end_cts = 0;
 };
@@ -83,6 +95,9 @@ class SynchronizedRecordingSession final {
     bool EstablishCommonStart();
     bool FlushStablePackets();
     bool FlushThrough(uint64_t source_cts);
+    void InferSourceCtsStep() noexcept;
+    std::optional<uint64_t> RunningWatermark() const noexcept;
+    void UpdatePeakRetainedBytes() noexcept;
     bool FinalizeAt(uint64_t common_end_cts);
     bool Fail(SynchronizedRecordingFailure failure) noexcept;
     void AbortUnlocked() noexcept;
@@ -102,10 +117,15 @@ class SynchronizedRecordingSession final {
     size_t pre_roll_bytes_a_ = 0;
     size_t pre_roll_bytes_b_ = 0;
     size_t peak_retained_bytes_ = 0;
+    size_t peak_tail_bytes_a_ = 0;
+    size_t peak_tail_bytes_b_ = 0;
     SynchronizedRecordingState state_ = SynchronizedRecordingState::Idle;
     SynchronizedRecordingFailure failure_ = SynchronizedRecordingFailure::None;
     uint64_t requested_start_cts_ = 0;
     uint64_t requested_stop_cts_ = 0;
+    uint64_t max_observed_cts_a_ = 0;
+    uint64_t max_observed_cts_b_ = 0;
+    uint64_t source_cts_step_ = 0;
     uint64_t last_flushed_cts_ = 0;
     bool has_flushed_cts_ = false;
     std::optional<CommonPacketRange> selected_range_;

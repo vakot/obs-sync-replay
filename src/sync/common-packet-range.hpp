@@ -31,6 +31,9 @@ CommonPacketRangeResult SelectCommonStart(const EncodedPacketBuffer& a, const En
                                           uint64_t requested_start_cts);
 CommonPacketRangeResult SelectCommonEnd(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
                                         CommonPacketRange range, uint64_t requested_stop_cts);
+std::optional<uint64_t> SelectCommonPrefixEnd(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
+                                              uint64_t start_cts, uint64_t upper_cts,
+                                              uint64_t expected_cts_step = 0);
 CommonPacketRangeResult ValidateCommonPacketRange(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
                                                   CommonPacketRange range);
 

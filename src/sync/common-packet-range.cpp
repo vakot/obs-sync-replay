@@ -43,21 +43,48 @@ CommonPacketRangeResult SelectCommonStart(const EncodedPacketBuffer& a, const En
 
 CommonPacketRangeResult SelectCommonEnd(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
                                         const CommonPacketRange range, const uint64_t requested_stop_cts) {
-    uint64_t candidate = 0;
-    bool found = false;
-    for (const EncodedPacket& packet : a.Snapshot()) {
-        if (packet.source_cts < range.start_cts || packet.source_cts > requested_stop_cts) {
-            continue;
-        }
-        if (b.Contains(packet.source_cts)) {
-            candidate = packet.source_cts;
-            found = true;
-        }
-    }
-    if (!found) {
+    const std::optional<uint64_t> candidate =
+        SelectCommonPrefixEnd(a, b, range.start_cts, requested_stop_cts);
+    if (!candidate) {
         return {std::nullopt, CommonPacketRangeFailure::NoCommonEnd, 0};
     }
-    return {{CommonPacketRange{range.start_cts, candidate}}, CommonPacketRangeFailure::None, 0};
+    return {{CommonPacketRange{range.start_cts, *candidate}}, CommonPacketRangeFailure::None, 0};
+}
+
+std::optional<uint64_t> SelectCommonPrefixEnd(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
+                                              const uint64_t start_cts, const uint64_t upper_cts,
+                                              const uint64_t expected_cts_step) {
+    const std::vector<EncodedPacket> packets_a = a.Snapshot();
+    const std::vector<EncodedPacket> packets_b = b.Snapshot();
+    size_t index_a = 0;
+    size_t index_b = 0;
+    while (index_a < packets_a.size() && packets_a[index_a].source_cts < start_cts) {
+        ++index_a;
+    }
+    while (index_b < packets_b.size() && packets_b[index_b].source_cts < start_cts) {
+        ++index_b;
+    }
+
+    std::optional<uint64_t> result;
+    while (index_a < packets_a.size() && index_b < packets_b.size()) {
+        const uint64_t cts_a = packets_a[index_a].source_cts;
+        const uint64_t cts_b = packets_b[index_b].source_cts;
+        if (cts_a > upper_cts || cts_b > upper_cts || cts_a != cts_b) {
+            break;
+        }
+        if (result && expected_cts_step != 0) {
+            const uint64_t delta = cts_a - *result;
+            const uint64_t difference = delta > expected_cts_step ? delta - expected_cts_step
+                                                                   : expected_cts_step - delta;
+            if (difference > 1) {
+                break;
+            }
+        }
+        result = cts_a;
+        ++index_a;
+        ++index_b;
+    }
+    return result;
 }
 
 CommonPacketRangeResult ValidateCommonPacketRange(const EncodedPacketBuffer& a, const EncodedPacketBuffer& b,
