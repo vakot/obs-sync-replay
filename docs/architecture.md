@@ -57,8 +57,10 @@ when implementation needs them.
 | Master frame coordinator | Produce the sole `master_frame_id` and PTS sequence; dispatch both renders | Read encoder completion time as a clock |
 | Scene render targets A/B | Render each selected scene for the supplied master tick | Generate timestamps independently |
 | Encoders A/B | Encode their render target while preserving submitted identity/PTS | Pair frames by completion order |
+| Recording session | Own one A/B transaction, common packet boundaries, drain, and rollback | Start/stop one output independently or use callback order as identity |
+| Encoded packet buffers | Own compressed bytes and bounded pre-roll/tail state | Evict a packet without an explicit capacity failure |
 | Synchronized replay buffer | Retain both projections on one logical timeline and apply deterministic eviction | Advance one output past the other silently |
-| Replay save/muxing | Snapshot one range and write two MKV projections with a shared replay ID | Select per-output boundaries |
+| Recording/muxing | Write validated compressed packets to two MKVs with one common source range | Decode, re-encode, or select per-output boundaries |
 | Validation | Check range, frame/slot counts, identities, PTS, and declared missing-slot policy | Downgrade drift to a warning and call the pair synchronized |
 | Logging | Emit joinable lifecycle, queue, missing-slot, range, and validation events | Report only generic success/failure text |
 
@@ -104,7 +106,7 @@ redundant paths such as
 module or component directories.
 
 Current implementations live in `src/plugin/`, `src/timeline/`, `src/rendering/`,
-and `src/pipeline/`, with tests mirroring the module hierarchy. `timeline/master-frame.hpp`
+`src/pipeline/`, `src/recording/`, `src/sync/`, and `src/muxing/`, with tests mirroring the module hierarchy. `timeline/master-frame.hpp`
 owns the reusable immutable `MasterFrame`, `MasterFrameId`, and `MasterFramePts`
 domain types, so rendering and downstream consumers need not include the timeline
 state machine.
@@ -118,8 +120,10 @@ The intended modules are:
 | `rendering` | Selected-scene render targets associated with an existing `MasterFrame` |
 | `pipeline` | GPU-side retention of one completed A/B render pair and its bounded shared FIFO |
 | `encoding` | Encoder ownership and packet association with submitted master identity |
+| `recording` | One transactional normal-Recording session and owned compressed packet buffers |
+| `sync` | Common packet-range selection and exact A/B range validation |
 | `replay` | One synchronized replay buffer, common ranges, and packet retention |
-| `muxing` | MKV outputs, common replay boundaries, and paired output naming |
+| `muxing` | Packet-only MKV output, codec setup, timestamp rebasing, and finalization |
 | `validation` | Invariant checks and diagnostics without a circular dependency from `timeline` |
 | `ui` | OBS configuration and controls without synchronization logic |
 
@@ -140,7 +144,7 @@ These paths are a convention only; do not create future module directories or fi
 until the corresponding implementation work begins.
 
 The intended dependency direction is
-`plugin -> timeline -> rendering -> pipeline -> encoding -> replay/muxing`, while `validation`
+`plugin -> timeline -> rendering -> pipeline -> encoding -> recording/sync -> muxing/replay`, while `validation`
 observes relevant domains and `ui` acts as a configuration/control layer. In
 particular, `rendering`, `encoding`, and `replay` may consume `timeline`, but
 `timeline` must not depend on rendering, encoding, replay, muxing, or UI.
@@ -385,10 +389,58 @@ plugin. This mirrors the dependency model used by the official OBS plugin templa
 while keeping the repository independent of an installed OBS SDK.
 
 The runtime module owns the master-frame coordinator, synchronous dual-scene
-renderers, and the bounded retained GPU-pair pipeline. It still owns no encoder,
-replay buffer, muxer, save action, audio, or output files. It exports the standard OBS
-module lifecycle functions and emits stable load/unload messages; its current
-synchronization boundary ends at a successfully retained GPU frame pair.
+renderers, and the bounded retained GPU-pair pipeline. The Phase 5 research Recording
+runner additionally owns two stock native OBS encoder/output lifecycles, the
+transactional compressed-packet session, and two plugin-owned MKV sinks. It does not
+patch OBS or introduce a second encoder. Replay Buffer, Save Replay, normal OBS
+hotkeys, and settings inheritance remain outside this phase.
+
+The Recording session starts both stock pipelines as a preparation step, buffers
+packets until a common keyframe CTS is observed, then opens both MKV sinks from that
+same CTS. After startup, each stream retains an ordered compressed-packet tail and
+tracks its highest observed public source CTS. The shared running watermark is:
+
+```text
+min(highest_observed_cts_A, highest_observed_cts_B) - reorder_safety_cts
+```
+
+Only the strict A/B common source-CTS prefix at or below that watermark is passed to
+the sinks. The safety window is an explicit encoder-completion reordering budget
+(5 seconds in the stock x264/NVENC research runner). Each sink converts that budget
+to the packet timebase and applies a second DTS watermark, so callback/source order
+cannot force an older decode timestamp after a committed packet. A tail overflow or
+packet that arrives at or below a committed CTS fails the transaction instead of
+allowing a late packet to rewrite muxed history. The session and each sink have fixed
+byte limits, so recording duration does not increase retained compressed memory.
+
+The common prefix also checks the configured OBS frame interval, allowing only one
+nanosecond of rational-clock rounding. A missing or delayed logical slot therefore
+blocks later CTS values even when both streams are missing that slot; it cannot be
+mistaken for a completed common prefix. Unit tests may infer the interval from the
+first paired packets, but the OBS runtime passes `obs_get_frame_interval_ns()`
+explicitly so initial encoder sparsity cannot establish a false cadence.
+
+Stop changes the session to `Draining`; both outputs are stopped, callbacks are
+allowed to finish, the remaining strict common prefix through the requested stop CTS
+selects one exact `commonEndCTS`, and both sinks receive that range in per-stream DTS
+order before finalization. A missing packet-time, duplicate CTS, unsafe late packet,
+range mismatch, sink failure, or capacity overflow is a failed transaction with no
+synchronized success result.
+
+The plugin also subscribes to stock OBS's public
+`OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP` boundary. OBS emits it during close
+after scene removal has begun but before its destroy queue is waited, which is the
+earliest public shutdown boundary available in OBS 32.2.1 for quiescing plugin-owned
+views while video and encoder callbacks are still alive. The callback schedules the
+blocking worker stop on a plugin-owned thread, then waits for that thread before
+returning. This keeps encoder/output teardown off the frontend callback's call stack
+while making the cleanup event a true quiescence barrier: both stock outputs drain
+and finalize their common range before callbacks, views, the coordinator, and the
+renderer are released.
+`OBS_FRONTEND_EVENT_EXIT` remains an idempotent fallback immediately before frontend
+callbacks are destroyed. Starting, running, draining, stopped, and failed sessions
+do not cause a second finalization or an invented range. OBS operations occur outside
+the recording-session mutex.
 
 Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and

@@ -6,7 +6,9 @@
 #include "rendering/synchronized-scene-renderer.hpp"
 #include "timeline/master-frame-coordinator.hpp"
 
+#include <atomic>
 #include <memory>
+#include <thread>
 
 namespace {
 
@@ -14,15 +16,74 @@ std::unique_ptr<obs_sync_replay::MasterFrameCoordinator> master_frame_coordinato
 std::unique_ptr<obs_sync_replay::SynchronizedSceneRenderer> synchronized_scene_renderer;
 std::unique_ptr<obs_sync_replay::DeterministicTestEnvironment> deterministic_test_environment;
 std::unique_ptr<obs_sync_replay::StockEncoderTimelineProbe> stock_encoder_timeline_probe;
+std::atomic<bool> shutdown_requested{false};
+std::thread shutdown_thread;
 bool bootstrap_registered = false;
 
-void OnFrontendEvent(enum obs_frontend_event event, void *) {
-    if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+void StopPluginOwnedPipeline(const char* boundary) {
+    blog(LOG_INFO, "[sync-shutdown] boundary=%s begin; stopping synchronized pipeline before OBS teardown", boundary);
+    if (stock_encoder_timeline_probe) {
+        stock_encoder_timeline_probe->Stop();
+    }
+    if (master_frame_coordinator) {
+        master_frame_coordinator->Stop();
+    }
+    if (synchronized_scene_renderer) {
+        synchronized_scene_renderer->Stop();
+    }
+    if (deterministic_test_environment) {
+        deterministic_test_environment.reset();
+    }
+    blog(LOG_INFO, "[sync-shutdown] boundary=%s complete; plugin-owned callbacks and views quiesced", boundary);
+}
+
+void RequestPluginOwnedPipelineStop(const char* boundary) {
+    if (shutdown_requested.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (!stock_encoder_timeline_probe && !master_frame_coordinator && !synchronized_scene_renderer &&
+        !deterministic_test_environment) {
         return;
     }
 
-    obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
-    bootstrap_registered = false;
+    bool expected = false;
+    if (!shutdown_requested.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    blog(LOG_INFO, "[sync-shutdown] boundary=%s requested; asynchronous pipeline teardown scheduled", boundary);
+    shutdown_thread = std::thread([boundary] { StopPluginOwnedPipeline(boundary); });
+}
+
+void JoinPluginOwnedPipelineStop(const char* boundary) {
+    if (!shutdown_thread.joinable()) {
+        return;
+    }
+    blog(LOG_INFO, "[sync-shutdown] boundary=%s waiting for pipeline teardown", boundary);
+    shutdown_thread.join();
+    blog(LOG_INFO, "[sync-shutdown] boundary=%s pipeline teardown joined", boundary);
+}
+
+void OnFrontendEvent(enum obs_frontend_event event, void *) {
+    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP) {
+        RequestPluginOwnedPipelineStop("scene-collection-cleanup");
+        JoinPluginOwnedPipelineStop("scene-collection-cleanup");
+        return;
+    }
+
+    if (event == OBS_FRONTEND_EVENT_EXIT) {
+        RequestPluginOwnedPipelineStop("frontend-exit");
+        JoinPluginOwnedPipelineStop("frontend-exit");
+        if (bootstrap_registered) {
+            obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+            bootstrap_registered = false;
+        }
+        return;
+    }
+
+    if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+        return;
+    }
 
     deterministic_test_environment = std::make_unique<obs_sync_replay::DeterministicTestEnvironment>();
     if (!deterministic_test_environment->Setup()) {
@@ -68,10 +129,13 @@ void obs_module_post_load(void) {
 }
 
 void obs_module_unload(void) {
+    blog(LOG_INFO, "[sync-shutdown] module-unload begin");
     if (bootstrap_registered) {
         obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
         bootstrap_registered = false;
     }
+    RequestPluginOwnedPipelineStop("module-unload");
+    JoinPluginOwnedPipelineStop("module-unload");
     stock_encoder_timeline_probe.reset();
     master_frame_coordinator.reset();
     synchronized_scene_renderer.reset();
