@@ -69,12 +69,15 @@ class SynchronizedCaptureSession final {
 
     bool Start();
     bool Ingest(CaptureStreamId stream_id, EncodedPacket packet, std::vector<uint8_t> codec_extra_data = {});
+    void SetReplayRetentionEnabled(bool enabled) noexcept;
     void Stop() noexcept;
 
     bool running() const noexcept;
     size_t stream_count() const noexcept;
     std::optional<uint64_t> common_watermark_cts() const noexcept;
     std::optional<ReplaySnapshot> SnapshotCommonRange(uint64_t duration_ns) const;
+    std::optional<ReplaySnapshot> SnapshotCommonRange(const std::vector<CaptureStreamId>& stream_ids,
+                                                      uint64_t duration_ns) const;
     SynchronizedCaptureMetrics metrics() const noexcept;
 
   private:

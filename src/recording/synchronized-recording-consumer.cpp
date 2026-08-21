@@ -21,8 +21,10 @@ uint64_t WallClockNs() {
 } // namespace
 
 SynchronizedRecordingConsumer::SynchronizedRecordingConsumer(std::vector<PacketStreamConfig> stream_configs,
-                                                             std::vector<std::filesystem::path> paths)
-    : stream_configs_(std::move(stream_configs)), paths_(std::move(paths)), pending_(stream_configs_.size()),
+                                                             std::vector<std::filesystem::path> paths,
+                                                             std::vector<CaptureStreamId> stream_ids)
+    : stream_configs_(std::move(stream_configs)), paths_(std::move(paths)), stream_ids_(std::move(stream_ids)),
+      pending_(stream_configs_.size()),
       writers_(stream_configs_.size()), dts_origins_(stream_configs_.size(), 0) {}
 
 SynchronizedRecordingConsumer::~SynchronizedRecordingConsumer() {
@@ -31,8 +33,15 @@ SynchronizedRecordingConsumer::~SynchronizedRecordingConsumer() {
 
 bool SynchronizedRecordingConsumer::Start() {
     const std::lock_guard<std::mutex> lock(mutex_);
-    if (running_ || worker_.joinable() || stream_configs_.empty() || stream_configs_.size() != paths_.size()) {
+    if (running_ || worker_.joinable() || stream_configs_.empty() || stream_configs_.size() != paths_.size() ||
+        (!stream_ids_.empty() && stream_ids_.size() != stream_configs_.size())) {
         return false;
+    }
+    if (stream_ids_.empty()) {
+        stream_ids_.resize(stream_configs_.size());
+        for (size_t index = 0; index < stream_ids_.size(); ++index) {
+            stream_ids_[index] = static_cast<CaptureStreamId>(index);
+        }
     }
     queue_.clear();
     for (auto& stream : pending_) {
@@ -60,7 +69,8 @@ void SynchronizedRecordingConsumer::OnPacket(OwnedCapturedEncodedPacket packet) 
     }
     {
         const std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_ || stop_requested_ || failed_ || packet->stream_id >= pending_.size()) {
+        const auto local_index = LocalStreamIndex(packet->stream_id);
+        if (!running_ || stop_requested_ || failed_ || !local_index) {
             return;
         }
         if (queue_.size() >= kMaxQueuePackets) {
@@ -110,11 +120,12 @@ void SynchronizedRecordingConsumer::Run() {
             queue_.pop_front();
         }
 
-        if (packet && packet->stream_id < pending_.size()) {
-            auto& stream = pending_[packet->stream_id];
+        const auto local_index = packet ? LocalStreamIndex(packet->stream_id) : std::nullopt;
+        if (packet && local_index) {
+            auto& stream = pending_[*local_index];
             if (stream.find(packet->packet.source_cts) == stream.end()) {
-                if (stream_configs_[packet->stream_id].extra_data.empty() && !packet->codec_extra_data.empty()) {
-                    stream_configs_[packet->stream_id].extra_data = packet->codec_extra_data;
+                if (stream_configs_[*local_index].extra_data.empty() && !packet->codec_extra_data.empty()) {
+                    stream_configs_[*local_index].extra_data = packet->codec_extra_data;
                 }
                 stream.emplace(packet->packet.source_cts, std::move(packet));
             }
@@ -261,6 +272,15 @@ void SynchronizedRecordingConsumer::Finalize() {
     if (!result_ || result_->error.empty()) {
         result_ = std::move(result);
     }
+}
+
+std::optional<size_t> SynchronizedRecordingConsumer::LocalStreamIndex(
+    const CaptureStreamId stream_id) const noexcept {
+    const auto it = std::find(stream_ids_.begin(), stream_ids_.end(), stream_id);
+    if (it == stream_ids_.end()) {
+        return std::nullopt;
+    }
+    return static_cast<size_t>(std::distance(stream_ids_.begin(), it));
 }
 
 } // namespace obs_sync_replay

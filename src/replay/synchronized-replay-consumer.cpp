@@ -55,11 +55,14 @@ SynchronizedReplayConsumer::~SynchronizedReplayConsumer() {
     Wait();
 }
 
-bool SynchronizedReplayConsumer::RequestSave(std::vector<std::filesystem::path> paths, const uint64_t duration_ns) {
+bool SynchronizedReplayConsumer::RequestSave(std::vector<std::filesystem::path> paths, const uint64_t duration_ns,
+                                              std::vector<CaptureStreamId> stream_ids) {
     if (paths.empty()) {
         return false;
     }
-    std::optional<ReplaySnapshot> snapshot = capture_.SnapshotCommonRange(duration_ns);
+    std::optional<ReplaySnapshot> snapshot = stream_ids.empty()
+                                                 ? capture_.SnapshotCommonRange(duration_ns)
+                                                 : capture_.SnapshotCommonRange(stream_ids, duration_ns);
     if (!snapshot || snapshot->packets.size() != paths.size()) {
         return false;
     }

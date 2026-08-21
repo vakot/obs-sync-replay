@@ -33,7 +33,8 @@ struct SynchronizedRecordingConsumerResult final {
 class SynchronizedRecordingConsumer final : public CapturePacketConsumer {
   public:
     SynchronizedRecordingConsumer(std::vector<PacketStreamConfig> stream_configs,
-                                  std::vector<std::filesystem::path> paths);
+                                  std::vector<std::filesystem::path> paths,
+                                  std::vector<CaptureStreamId> stream_ids = {});
     ~SynchronizedRecordingConsumer();
 
     SynchronizedRecordingConsumer(const SynchronizedRecordingConsumer&) = delete;
@@ -53,6 +54,7 @@ class SynchronizedRecordingConsumer final : public CapturePacketConsumer {
 
     std::vector<PacketStreamConfig> stream_configs_;
     std::vector<std::filesystem::path> paths_;
+    std::vector<CaptureStreamId> stream_ids_;
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::deque<OwnedCapturedEncodedPacket> queue_;
@@ -69,6 +71,8 @@ class SynchronizedRecordingConsumer final : public CapturePacketConsumer {
     uint64_t packet_count_ = 0;
     uint64_t start_wall_ns_ = 0;
     std::optional<SynchronizedRecordingConsumerResult> result_;
+
+    std::optional<size_t> LocalStreamIndex(CaptureStreamId stream_id) const noexcept;
 };
 
 } // namespace obs_sync_replay

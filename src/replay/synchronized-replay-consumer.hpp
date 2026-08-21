@@ -32,7 +32,8 @@ class SynchronizedReplayConsumer final {
     SynchronizedReplayConsumer(const SynchronizedReplayConsumer&) = delete;
     SynchronizedReplayConsumer& operator=(const SynchronizedReplayConsumer&) = delete;
 
-    bool RequestSave(std::vector<std::filesystem::path> paths, uint64_t duration_ns);
+    bool RequestSave(std::vector<std::filesystem::path> paths, uint64_t duration_ns,
+                     std::vector<CaptureStreamId> stream_ids = {});
     void Wait() noexcept;
     bool active() const noexcept;
     std::optional<ReplaySaveResult> last_result() const;

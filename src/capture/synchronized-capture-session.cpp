@@ -47,16 +47,18 @@ void EvictToCapacity(StreamState& stream, const size_t capacity_bytes, uint64_t*
     }
 }
 
-bool ContainsAll(const std::vector<StreamState>& streams, const uint64_t cts) {
-    return std::all_of(streams.begin(), streams.end(), [cts](const StreamState& stream) {
-        return stream.packets.find(cts) != stream.packets.end();
+bool ContainsAll(const std::vector<StreamState>& streams, const std::vector<CaptureStreamId>& stream_ids,
+                 const uint64_t cts) {
+    return std::all_of(stream_ids.begin(), stream_ids.end(), [&streams, cts](const CaptureStreamId stream_id) {
+        return streams[stream_id].packets.find(cts) != streams[stream_id].packets.end();
     });
 }
 
-bool AllKeyframes(const std::vector<StreamState>& streams, const uint64_t cts) {
-    return std::all_of(streams.begin(), streams.end(), [cts](const StreamState& stream) {
-        const auto packet = stream.packets.find(cts);
-        return packet != stream.packets.end() && packet->second->packet.keyframe;
+bool AllKeyframes(const std::vector<StreamState>& streams, const std::vector<CaptureStreamId>& stream_ids,
+                  const uint64_t cts) {
+    return std::all_of(stream_ids.begin(), stream_ids.end(), [&streams, cts](const CaptureStreamId stream_id) {
+        const auto packet = streams[stream_id].packets.find(cts);
+        return packet != streams[stream_id].packets.end() && packet->second->packet.keyframe;
     });
 }
 
@@ -74,6 +76,7 @@ struct SynchronizedCaptureSession::State final {
     uint64_t evicted_packet_count = 0;
     uint64_t duplicate_packet_count = 0;
     uint64_t rejected_packet_count = 0;
+    bool replay_retention_enabled = true;
     mutable std::mutex mutex;
 };
 
@@ -167,17 +170,19 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
         packet_value->packet = std::move(packet);
         packet_value->codec_extra_data = std::move(codec_extra_data);
         owned_packet = std::move(packet_value);
-        stream.packets.emplace(owned_packet->packet.source_cts, owned_packet);
-        stream.retained_bytes += PacketBytes(owned_packet);
-        stream.peak_retained_bytes = std::max(stream.peak_retained_bytes, stream.retained_bytes);
-        stream.max_source_cts = std::max(stream.max_source_cts, owned_packet->packet.source_cts);
-        stream.has_source_cts = true;
-        state_->retained_bytes += PacketBytes(owned_packet);
-        state_->peak_retained_bytes = std::max(state_->peak_retained_bytes, state_->retained_bytes);
-        EvictToCapacity(stream, state_->config.ring_capacity_bytes, &state_->evicted_packet_count);
-        state_->retained_bytes = 0;
-        for (const StreamState& current : state_->streams) {
-            state_->retained_bytes += current.retained_bytes;
+        if (state_->replay_retention_enabled) {
+            stream.packets.emplace(owned_packet->packet.source_cts, owned_packet);
+            stream.retained_bytes += PacketBytes(owned_packet);
+            stream.peak_retained_bytes = std::max(stream.peak_retained_bytes, stream.retained_bytes);
+            stream.max_source_cts = std::max(stream.max_source_cts, owned_packet->packet.source_cts);
+            stream.has_source_cts = true;
+            state_->retained_bytes += PacketBytes(owned_packet);
+            state_->peak_retained_bytes = std::max(state_->peak_retained_bytes, state_->retained_bytes);
+            EvictToCapacity(stream, state_->config.ring_capacity_bytes, &state_->evicted_packet_count);
+            state_->retained_bytes = 0;
+            for (const StreamState& current : state_->streams) {
+                state_->retained_bytes += current.retained_bytes;
+            }
         }
         consumers = state_->consumers;
     }
@@ -190,6 +195,21 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
         }
     }
     return true;
+}
+
+void SynchronizedCaptureSession::SetReplayRetentionEnabled(const bool enabled) noexcept {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->replay_retention_enabled = enabled;
+    if (enabled) {
+        return;
+    }
+    for (StreamState& stream : state_->streams) {
+        stream.packets.clear();
+        stream.retained_bytes = 0;
+        stream.max_source_cts = 0;
+        stream.has_source_cts = false;
+    }
+    state_->retained_bytes = 0;
 }
 
 void SynchronizedCaptureSession::Stop() noexcept {
@@ -222,16 +242,37 @@ std::optional<uint64_t> SynchronizedCaptureSession::common_watermark_cts() const
 }
 
 std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(const uint64_t duration_ns) const {
+    std::vector<CaptureStreamId> stream_ids;
+    {
+        const std::lock_guard<std::mutex> lock(state_->mutex);
+        stream_ids.reserve(state_->streams.size());
+        for (CaptureStreamId stream_id = 0; stream_id < state_->streams.size(); ++stream_id) {
+            stream_ids.push_back(stream_id);
+        }
+    }
+    return SnapshotCommonRange(stream_ids, duration_ns);
+}
+
+std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
+    const std::vector<CaptureStreamId>& stream_ids, const uint64_t duration_ns) const {
     const std::lock_guard<std::mutex> lock(state_->mutex);
-    if (state_->streams.empty() || duration_ns == 0 ||
-        std::any_of(state_->streams.begin(), state_->streams.end(),
-                    [](const StreamState& stream) { return stream.packets.empty(); })) {
+    if (!state_->replay_retention_enabled || stream_ids.empty() || duration_ns == 0) {
         return std::nullopt;
+    }
+    for (size_t index = 0; index < stream_ids.size(); ++index) {
+        const CaptureStreamId stream_id = stream_ids[index];
+        if (stream_id >= state_->streams.size() ||
+            std::find(stream_ids.begin(), stream_ids.begin() + static_cast<std::ptrdiff_t>(index), stream_id) !=
+                stream_ids.begin() + static_cast<std::ptrdiff_t>(index) ||
+            state_->streams[stream_id].packets.empty()) {
+            return std::nullopt;
+        }
     }
 
     uint64_t latest_first = 0;
     uint64_t earliest_last = std::numeric_limits<uint64_t>::max();
-    for (const StreamState& stream : state_->streams) {
+    for (const CaptureStreamId stream_id : stream_ids) {
+        const StreamState& stream = state_->streams[stream_id];
         latest_first = std::max(latest_first, stream.packets.begin()->first);
         earliest_last = std::min(earliest_last, stream.packets.rbegin()->first);
     }
@@ -240,8 +281,8 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(co
     }
 
     std::optional<uint64_t> start_cts;
-    for (const auto& [cts, packet] : state_->streams.front().packets) {
-        if (cts < latest_first || cts > earliest_last || !AllKeyframes(state_->streams, cts)) {
+    for (const auto& [cts, packet] : state_->streams[stream_ids.front()].packets) {
+        if (cts < latest_first || cts > earliest_last || !AllKeyframes(state_->streams, stream_ids, cts)) {
             continue;
         }
         const uint64_t target = earliest_last > duration_ns ? earliest_last - duration_ns : latest_first;
@@ -250,8 +291,8 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(co
         }
     }
     if (!start_cts) {
-        for (const auto& [cts, packet] : state_->streams.front().packets) {
-            if (cts >= latest_first && cts <= earliest_last && AllKeyframes(state_->streams, cts)) {
+        for (const auto& [cts, packet] : state_->streams[stream_ids.front()].packets) {
+            if (cts >= latest_first && cts <= earliest_last && AllKeyframes(state_->streams, stream_ids, cts)) {
                 start_cts = cts;
                 break;
             }
@@ -262,11 +303,11 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(co
     }
 
     uint64_t end_cts = *start_cts;
-    for (const auto& [cts, packet] : state_->streams.front().packets) {
+    for (const auto& [cts, packet] : state_->streams[stream_ids.front()].packets) {
         if (cts < *start_cts || cts > earliest_last) {
             continue;
         }
-        if (!ContainsAll(state_->streams, cts)) {
+        if (!ContainsAll(state_->streams, stream_ids, cts)) {
             break;
         }
         end_cts = cts;
@@ -277,11 +318,11 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(co
 
     ReplaySnapshot snapshot;
     snapshot.range = {*start_cts, end_cts};
-    snapshot.packets.resize(state_->streams.size());
-    snapshot.stream_names.reserve(state_->streams.size());
-    snapshot.stream_configs.reserve(state_->streams.size());
-    for (size_t index = 0; index < state_->streams.size(); ++index) {
-        const StreamState& stream = state_->streams[index];
+    snapshot.packets.resize(stream_ids.size());
+    snapshot.stream_names.reserve(stream_ids.size());
+    snapshot.stream_configs.reserve(stream_ids.size());
+    for (size_t index = 0; index < stream_ids.size(); ++index) {
+        const StreamState& stream = state_->streams[stream_ids[index]];
         snapshot.stream_names.push_back(stream.name);
         snapshot.stream_configs.push_back(stream.config);
         for (auto it = stream.packets.lower_bound(*start_cts);

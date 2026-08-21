@@ -49,6 +49,16 @@ target_compile_features(obs-sync-replay-capture PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-capture PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 add_library(
+  obs-sync-replay-control
+  STATIC
+  src/control/capture-configuration.cpp
+  src/control/capture-control.cpp
+)
+target_link_libraries(obs-sync-replay-control PUBLIC obs-sync-replay-capture obs-sync-replay-replay)
+target_compile_features(obs-sync-replay-control PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_library(
   obs-sync-replay-replay
   STATIC
   src/recording/synchronized-recording-consumer.cpp
@@ -85,6 +95,7 @@ target_link_libraries(
   obs-sync-replay
   PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
           obs-sync-replay-recording obs-sync-replay-muxing obs-sync-replay-capture obs-sync-replay-replay
+          obs-sync-replay-control
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
@@ -177,6 +188,15 @@ if(MSVC)
 endif()
 add_test(NAME synchronized-replay-consumer COMMAND synchronized-replay-consumer-test)
 set_tests_properties(synchronized-replay-consumer PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
+
+add_executable(capture-control-test tests/control/capture-control-test.cpp)
+target_link_libraries(capture-control-test PRIVATE obs-sync-replay-control)
+target_compile_features(capture-control-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(capture-control-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME capture-control COMMAND capture-control-test)
+set_tests_properties(capture-control PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
 
 add_test(
   NAME plugin-artifact
