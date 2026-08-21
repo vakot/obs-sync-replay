@@ -63,6 +63,7 @@ struct PocConfig final {
     uint32_t warmup_milliseconds = kDefaultWarmupMilliseconds;
     uint32_t output_seconds = kDefaultOutputSeconds;
     uint32_t ring_seconds = kDefaultRingSeconds;
+    uint32_t test_save_delay_ms = 0;
     uint32_t transition_duration_ms = kDefaultTransitionDurationMilliseconds;
     uint32_t transition_period_seconds = kDefaultTransitionPeriodSeconds;
 };
@@ -101,6 +102,7 @@ PocConfig ReadConfig() {
         ReadEnvironmentUint("OBS_SYNC_REPLAY_THREE_STREAM_OUTPUT_SECONDS", kDefaultOutputSeconds);
     config.ring_seconds =
         ReadEnvironmentUint("OBS_SYNC_REPLAY_THREE_STREAM_RING_SECONDS", kDefaultRingSeconds);
+    config.test_save_delay_ms = ReadEnvironmentUint("OBS_SYNC_REPLAY_THREE_STREAM_SAVE_DELAY_MS", 0);
     config.transition_duration_ms = ReadEnvironmentUint("OBS_SYNC_REPLAY_THREE_STREAM_TRANSITION_MS",
                                                         kDefaultTransitionDurationMilliseconds);
     config.transition_period_seconds = ReadEnvironmentUint("OBS_SYNC_REPLAY_THREE_STREAM_TRANSITION_PERIOD_SECONDS",
@@ -383,7 +385,7 @@ void ThreeStreamCapturePoc::Run() {
             {StreamId::SceneB, nullptr, nullptr, nullptr, {}, false},
         }};
         SynchronizedCaptureSession capture(capture_config);
-        SynchronizedReplayConsumer replay_consumer(capture);
+        SynchronizedReplayConsumer replay_consumer(capture, config.test_save_delay_ms);
         const std::filesystem::path directory = std::filesystem::current_path() / "three-stream-poc";
         std::error_code directory_error;
         std::filesystem::create_directories(directory, directory_error);
@@ -511,10 +513,12 @@ void ThreeStreamCapturePoc::Run() {
                             save_results.push_back(*result);
                             blog(result->success ? LOG_INFO : LOG_ERROR,
                                  "[three-stream-poc] replay-save-result encoder=%s number=%u success=%s "
-                                 "range_start_cts=%llu range_end_cts=%llu mux_wall_ms=%llu error=%s",
+                                 "range_start_cts=%llu range_end_cts=%llu snapshot_payload_bytes=%llu "
+                                 "mux_wall_ms=%llu error=%s",
                                  encoder_id, save_number + 1, result->success ? "true" : "false",
                                  static_cast<unsigned long long>(result->range.start_cts),
                                  static_cast<unsigned long long>(result->range.end_cts),
+                                 static_cast<unsigned long long>(result->snapshot_payload_bytes),
                                  static_cast<unsigned long long>(result->wall_time_ms), result->error.c_str());
                         }
                         ++save_number;

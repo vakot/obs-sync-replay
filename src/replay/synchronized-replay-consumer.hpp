@@ -19,13 +19,14 @@ struct ReplaySaveResult final {
     ReplayFrameRange range;
     std::vector<std::filesystem::path> paths;
     std::vector<MkvWriteResult> streams;
+    uint64_t snapshot_payload_bytes = 0;
     uint64_t wall_time_ms = 0;
     std::string error;
 };
 
 class SynchronizedReplayConsumer final {
   public:
-    explicit SynchronizedReplayConsumer(SynchronizedCaptureSession& capture);
+    explicit SynchronizedReplayConsumer(SynchronizedCaptureSession& capture, uint32_t test_save_delay_ms = 0);
     ~SynchronizedReplayConsumer();
 
     SynchronizedReplayConsumer(const SynchronizedReplayConsumer&) = delete;
@@ -40,6 +41,7 @@ class SynchronizedReplayConsumer final {
     static ReplaySaveResult WriteSnapshot(ReplaySnapshot snapshot, std::vector<std::filesystem::path> paths);
 
     SynchronizedCaptureSession& capture_;
+    const uint32_t test_save_delay_ms_;
     mutable std::mutex mutex_;
     std::thread worker_;
     bool active_ = false;

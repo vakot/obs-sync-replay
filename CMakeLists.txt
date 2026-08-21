@@ -169,6 +169,15 @@ if(MSVC)
 endif()
 add_test(NAME synchronized-capture-session COMMAND synchronized-capture-session-test)
 
+add_executable(synchronized-replay-consumer-test tests/replay/synchronized-replay-consumer-test.cpp)
+target_link_libraries(synchronized-replay-consumer-test PRIVATE obs-sync-replay-replay)
+target_compile_features(synchronized-replay-consumer-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-replay-consumer-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-replay-consumer COMMAND synchronized-replay-consumer-test)
+set_tests_properties(synchronized-replay-consumer PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
+
 add_test(
   NAME plugin-artifact
   COMMAND

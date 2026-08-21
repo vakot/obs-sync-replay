@@ -47,7 +47,9 @@ std::vector<EncodedPacket> MuxPackets(const std::vector<OwnedCapturedEncodedPack
 
 } // namespace
 
-SynchronizedReplayConsumer::SynchronizedReplayConsumer(SynchronizedCaptureSession& capture) : capture_(capture) {}
+SynchronizedReplayConsumer::SynchronizedReplayConsumer(SynchronizedCaptureSession& capture,
+                                                       const uint32_t test_save_delay_ms)
+    : capture_(capture), test_save_delay_ms_(test_save_delay_ms) {}
 
 SynchronizedReplayConsumer::~SynchronizedReplayConsumer() {
     Wait();
@@ -74,6 +76,9 @@ bool SynchronizedReplayConsumer::RequestSave(std::vector<std::filesystem::path> 
         active_ = true;
         last_result_.reset();
         worker_ = std::thread([this, snapshot = std::move(*snapshot), paths = std::move(paths)]() mutable {
+            if (test_save_delay_ms_ > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(test_save_delay_ms_));
+            }
             ReplaySaveResult result = WriteSnapshot(std::move(snapshot), std::move(paths));
             const std::lock_guard<std::mutex> lock(mutex_);
             last_result_ = std::move(result);
@@ -120,6 +125,11 @@ ReplaySaveResult SynchronizedReplayConsumer::WriteSnapshot(ReplaySnapshot snapsh
     }
 
     for (size_t index = 0; index < snapshot.packets.size(); ++index) {
+        for (const auto& packet : snapshot.packets[index]) {
+            if (packet) {
+                result.snapshot_payload_bytes += packet->packet.payload.size();
+            }
+        }
         MkvPacketWriter writer;
         if (!writer.Open(result.paths[index].string(), snapshot.stream_configs[index])) {
             result.error = "stream-open-failed:" + writer.error();

@@ -80,12 +80,18 @@ for every inspected recording and replay file.
 The same transition signal check still showed Master intermediate content while
 Scene A and Scene B remained their distinct synthetic colors for both encoders.
 
+For active-save shutdown validation, the harness supports the default-off
+`OBS_SYNC_REPLAY_THREE_STREAM_SAVE_DELAY_MS` hook. It delays only the test worker
+after snapshot ownership is established, allowing WM_CLOSE to exercise shutdown
+while the save is active without changing production mux timing.
+
 ## Resource and scope notes
 
 The POC uses three native video encoders and three AAC harness encoders because the
 OBS null output requires audio setup; audio is not part of this synchronization
 claim. Replay snapshots add reference ownership, not a second compressed payload
-copy. The tested 20-second ring used about 30 MB per stream at its configured
+copy; runtime results log the aggregate snapshot payload bytes retained by each
+async save. The tested 20-second ring used about 30 MB per stream at its configured
 capacity. A production implementation still needs explicit policy for callback
 subscription synchronization, broader encoder packet-order contracts, and longer
 endurance runs before UI or audio work.
@@ -95,4 +101,31 @@ endurance runs before UI or audio work.
 The shared capture foundation now demonstrates one native three-stream encoder
 topology serving live Recording and asynchronous Replay, with bounded GOP-safe
 retention, common keyframe-aligned ranges, repeated saves, and independent consumer
-shutdown. No merge or pull request was performed; this branch is ready for review.
+shutdown. UI, audio, and stock Replay Buffer settings remain out of scope for this
+Phase 6 change.
+
+## Closure validation
+
+The final validation pass added a deterministic, default-off save-worker delay solely
+for the shutdown race. With WM_CLOSE sent after `replay-save-request`:
+
+- x264: the active save completed successfully, Recording finalized successfully,
+  and the portable OBS process exited normally after synchronized pipeline teardown;
+- NVENC: the active save completed successfully, Recording finalized successfully,
+  and the portable OBS process exited normally after synchronized pipeline teardown.
+
+The long soak ran 130 seconds per encoder with a 60-second ring, two 8-second saves,
+and repeated 5-second Program transitions. x264 retained 88,616,998 bytes at stop
+with a 90,008,334-byte peak and 12,960 evictions; NVENC retained 88,898,105 bytes
+with a 90,008,333-byte peak and 12,960 evictions. Recording contained 7,866 and
+7,876 packets per stream respectively, and every soak Recording/Replay trio decoded
+successfully with equal PTS/DTS/keyframe signatures.
+
+A final short run logged aggregate snapshot payload ownership of 12,160,924 and
+12,100,002 bytes for x264 saves, and 12,424,998 and 12,399,999 bytes for NVENC
+saves. Its six output groups had equal per-stream packet counts of 485/484 and
+497/496 for Replay, and 1,567/1,578 for Recording; all groups decoded successfully.
+The runtime logs reported `video_encoder_count=3` for each encoder topology, with
+Master, Scene A, and Scene B bound to the same encoder family and no separate Replay
+encoders. Signalstats showed Master transition content spanning the synthetic scene
+values while Scene A and Scene B remained independently distinct.

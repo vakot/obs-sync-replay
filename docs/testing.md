@@ -116,6 +116,11 @@ serialized asynchronous Replay saves concurrently from the same native x264 or
 NVENC encoders. Validate every output trio with FFmpeg decode plus equal PTS/DTS/
 keyframe signatures; equal wall-clock durations alone are insufficient.
 
+`synchronized-replay-consumer-test` verifies concurrent-save rejection, save-worker
+completion after capture stop, save-after-stop from frozen history, and repeated
+save completion using the consumer's deterministic test barrier. It also verifies a
+failed save is observable and does not prevent a subsequent save.
+
 The focused session test also runs a three-hour synthetic 60 FPS logical timeline and
 asserts that retained tail bytes remain bounded after incremental commits. It covers
 asymmetric callback arrival, strict-prefix safety when one stream is ahead, reordered

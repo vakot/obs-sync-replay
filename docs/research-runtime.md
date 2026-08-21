@@ -11,6 +11,12 @@ The reproducible entry point is:
 Use `-SkipUpdateCheck` when the clean runtime should pass OBS's
 `--disable-updater` startup option.
 
+For the active-save shutdown test only, set
+`OBS_SYNC_REPLAY_THREE_STREAM_SAVE_DELAY_MS` to a positive value. The default is
+zero; this test-only hook delays a replay worker after it snapshots packets so a
+normal WM_CLOSE can be exercised while the save is active. It does not slow normal
+muxing.
+
 `run-obs-research.ps1` refuses to modify a running portable OBS process. It clears
 the runtime's `config` directory and the plugin data directory, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
