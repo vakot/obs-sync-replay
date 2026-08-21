@@ -427,6 +427,21 @@ order before finalization. A missing packet-time, duplicate CTS, unsafe late pac
 range mismatch, sink failure, or capacity overflow is a failed transaction with no
 synchronized success result.
 
+The plugin also subscribes to stock OBS's public
+`OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP` boundary. OBS emits it during close
+after scene removal has begun but before its destroy queue is waited, which is the
+earliest public shutdown boundary available in OBS 32.2.1 for quiescing plugin-owned
+views while video and encoder callbacks are still alive. The callback schedules the
+blocking worker stop on a plugin-owned thread, then waits for that thread before
+returning. This keeps encoder/output teardown off the frontend callback's call stack
+while making the cleanup event a true quiescence barrier: both stock outputs drain
+and finalize their common range before callbacks, views, the coordinator, and the
+renderer are released.
+`OBS_FRONTEND_EVENT_EXIT` remains an idempotent fallback immediately before frontend
+callbacks are destroyed. Starting, running, draining, stopped, and failed sessions
+do not cause a second finalization or an invented range. OBS operations occur outside
+the recording-session mutex.
+
 Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and
 `data/obs-plugins/obs-sync-replay` for module data. Development deployment is limited

@@ -112,6 +112,8 @@ The focused session test also runs a three-hour synthetic 60 FPS logical timelin
 asserts that retained tail bytes remain bounded after incremental commits. It covers
 asymmetric callback arrival, strict-prefix safety when one stream is ahead, reordered
 PTS/DTS at Stop, partial-streaming failure, and transactional finalization failure.
+It also covers idempotent stop/drain behavior after finalization and explicit abort
+behavior when shutdown arrives before a common start exists.
 
 On 2026-08-21, a clean portable smoke run completed both x264 and NVENC H.264
 sessions with `state=stopped failure=none`. FFprobe decoded the resulting A/B MKVs;
