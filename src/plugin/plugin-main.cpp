@@ -50,7 +50,15 @@ bool OnStopRecordingHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool p
 
 bool OnStartReplayHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pressed) {
     auto* runtime = static_cast<obs_sync_replay::PluginCaptureRuntime*>(data);
-    if (!runtime || !pressed || runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Off) {
+    if (!runtime || !pressed) {
+        return false;
+    }
+    (void)runtime->RefreshReplayConfiguration();
+    if (!runtime->replay_available()) {
+        blog(LOG_INFO, "[plugin-hotkey] replay-start-rejected reason=replay-unavailable-by-obs-config");
+        return false;
+    }
+    if (runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Off) {
         return false;
     }
     LogCommand("hotkey-replay-start", runtime->StartReplay());
@@ -59,7 +67,11 @@ bool OnStartReplayHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pre
 
 bool OnStopReplayHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pressed) {
     auto* runtime = static_cast<obs_sync_replay::PluginCaptureRuntime*>(data);
-    if (!runtime || !pressed || runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Running) {
+    if (!runtime || !pressed) {
+        return false;
+    }
+    (void)runtime->RefreshReplayConfiguration();
+    if (!runtime->replay_available() || runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Running) {
         return false;
     }
     LogCommand("hotkey-replay-stop", runtime->StopReplay());
@@ -68,7 +80,11 @@ bool OnStopReplayHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pres
 
 void OnSaveReplayHotkey(void* data, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
     auto* runtime = static_cast<obs_sync_replay::PluginCaptureRuntime*>(data);
-    if (!runtime || !pressed || runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Running) {
+    if (!runtime || !pressed) {
+        return;
+    }
+    (void)runtime->RefreshReplayConfiguration();
+    if (!runtime->replay_available() || runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Running) {
         return;
     }
     LogCommand("hotkey-replay-save", runtime->SaveReplay());
@@ -134,18 +150,11 @@ void StopPluginOwnedRuntime(const char* boundary) {
     blog(LOG_INFO, "[sync-shutdown] boundary=%s complete plugin-owned runtime stopped", boundary);
 }
 
-void OnFrontendEvent(enum obs_frontend_event event, void*) {
-    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP || event == OBS_FRONTEND_EVENT_EXIT) {
-        StopPluginOwnedRuntime(event == OBS_FRONTEND_EVENT_EXIT ? "frontend-exit" : "scene-collection-cleanup");
-        if (event == OBS_FRONTEND_EVENT_EXIT && frontend_registered) {
-            obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
-            frontend_registered = false;
-        }
+void StartPluginOwnedRuntime() {
+    if (shutdown_requested.load(std::memory_order_acquire) || capture_runtime) {
         return;
     }
-    if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING || shutdown_requested.load(std::memory_order_acquire)) {
-        return;
-    }
+    shutdown_requested.store(false, std::memory_order_release);
 
     deterministic_test_environment = std::make_unique<obs_sync_replay::DeterministicTestEnvironment>();
     if (!deterministic_test_environment->Setup()) {
@@ -192,8 +201,41 @@ void OnFrontendEvent(enum obs_frontend_event event, void*) {
     }
     RegisterPluginHotkeys();
     blog(LOG_INFO,
-         "[obs-sync-replay] plugin-owned controls ready ui_replaced=%s recording=off replay=off active_encoders=0",
-         capture_controls ? "true" : "false");
+         "[obs-sync-replay] plugin-owned controls ready ui_replaced=%s recording=off replay=off replay_available=%s "
+         "active_encoders=0",
+         capture_controls ? "true" : "false", capture_runtime->replay_available() ? "true" : "false");
+}
+
+void OnFrontendEvent(enum obs_frontend_event event, void*) {
+    if (event == OBS_FRONTEND_EVENT_EXIT) {
+        StopPluginOwnedRuntime("frontend-exit");
+        if (frontend_registered) {
+            obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+            frontend_registered = false;
+        }
+        return;
+    }
+    if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGING || event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP) {
+        StopPluginOwnedRuntime(event == OBS_FRONTEND_EVENT_PROFILE_CHANGING ? "profile-changing"
+                                                                              : "scene-collection-cleanup");
+        // StopPluginOwnedRuntime uses this guard to keep teardown callbacks from
+        // re-entering the plugin. A profile/scene reload is a valid restart
+        // boundary, unlike frontend exit.
+        shutdown_requested.store(false, std::memory_order_release);
+        return;
+    }
+    if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGED) {
+        if (capture_runtime) {
+            LogCommand("profile-replay-config-refresh", capture_runtime->RefreshReplayConfiguration());
+        } else {
+            StartPluginOwnedRuntime();
+        }
+        return;
+    }
+    if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+        return;
+    }
+    StartPluginOwnedRuntime();
 }
 
 } // namespace

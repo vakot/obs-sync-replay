@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/replay-configuration.hpp"
 #include "control/capture-control.hpp"
 
 #include <cstddef>
@@ -28,6 +29,8 @@ public:
     ControlCommandResult StartReplay();
     ControlCommandResult SaveReplay();
     ControlCommandResult StopReplay();
+    ControlCommandResult ApplyReplayConfiguration(ReplayConfiguration configuration);
+    ControlCommandResult RefreshReplayConfiguration();
     void PollReplaySave() noexcept;
     void Stop();
 
@@ -36,6 +39,7 @@ public:
     RecordingConsumerState recording_state() const noexcept;
     ReplayConsumerState replay_state() const noexcept;
     size_t active_encoder_count() const noexcept;
+    bool replay_available() const noexcept;
 
 private:
     struct State;
@@ -46,6 +50,7 @@ private:
 
     std::string scene_a_name_;
     std::string scene_b_name_;
+    ReplayConfiguration replay_configuration_;
     std::unique_ptr<State> state_;
     std::unique_ptr<ControlState> control_state_;
     mutable std::mutex mutex_;

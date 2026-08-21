@@ -501,9 +501,13 @@ configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
 
 The former scripted OBS development harness was removed from the product runtime;
 the control engine's deterministic unit tests remain the separate validation path.
-Persistent settings, final per-scene configuration, audio, and Replay visibility based
-on the OBS Replay Buffer setting remain deferred. Native control lookup is isolated in
-the adapter because its object names and layout structure are OBS-version-sensitive.
+The plugin now consumes the active profile's public OBS Replay Buffer settings for
+availability, shared duration, and shared memory policy. It never starts or uses
+the stock replay output. Exact Simple/Advanced keys, unsupported encoder modes,
+refresh boundaries, the active-disable transition, and the emergency bound are
+documented in [`replay-configuration.md`](replay-configuration.md). Native control
+lookup remains isolated in the adapter because its object names and layout
+structure are OBS-version-sensitive.
 
 The product idle invariant is checked at load: before any explicit UI or hotkey
 action, Recording and Replay are Off and the plugin-owned active encoder count is

@@ -53,6 +53,7 @@ target_include_directories(obs-sync-replay-capture PUBLIC "${CMAKE_CURRENT_SOURC
 add_library(
   obs-sync-replay-control
   STATIC
+  src/config/replay-configuration.cpp
   src/control/capture-configuration.cpp
   src/control/capture-control.cpp
 )
@@ -85,6 +86,7 @@ add_library(
   obs-sync-replay
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
+  src/config/obs-replay-configuration.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
   src/control/plugin-capture-runtime.cpp
   src/plugin/plugin-main.cpp
@@ -150,6 +152,14 @@ if(MSVC)
   target_compile_options(master-frame-timeline-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME master-frame-timeline COMMAND master-frame-timeline-test)
+
+add_executable(replay-configuration-test tests/config/replay-configuration-test.cpp)
+target_link_libraries(replay-configuration-test PRIVATE obs-sync-replay-control)
+target_compile_features(replay-configuration-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(replay-configuration-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME replay-configuration COMMAND replay-configuration-test)
 
 add_executable(
   synchronized-scene-renderer-test

@@ -38,8 +38,8 @@ struct CaptureControlsPresentation final {
 
 inline CaptureControlsPresentation MakeCaptureControlsPresentation(
     const CaptureInfrastructureState infrastructure, const RecordingConsumerState recording,
-    const ReplayConsumerState replay, const bool recording_failed, const bool replay_failed,
-    const CaptureControlsLabels &labels) {
+    const ReplayConsumerState replay, const bool replay_available, const bool recording_failed,
+    const bool replay_failed, const CaptureControlsLabels &labels) {
     CaptureControlsPresentation presentation;
     presentation.save_replay_text = labels.save_replay;
 
@@ -62,7 +62,9 @@ inline CaptureControlsPresentation MakeCaptureControlsPresentation(
         }
     }
 
-    if (infrastructure == CaptureInfrastructureState::Failed || replay_failed) {
+    if (!replay_available) {
+        presentation.replay = {CaptureControlVisualState::Inactive, labels.replay_buffer_unavailable, false, false};
+    } else if (infrastructure == CaptureInfrastructureState::Failed || replay_failed) {
         presentation.replay = {CaptureControlVisualState::Failed, labels.replay_buffer_unavailable, false, true};
     } else {
         switch (replay) {

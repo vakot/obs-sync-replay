@@ -24,25 +24,54 @@ size_t PacketBytes(const OwnedCapturedEncodedPacket& packet) {
     return packet ? packet->packet.payload.size() : 0;
 }
 
-void EvictToCapacity(StreamState& stream, const size_t capacity_bytes, uint64_t* evicted_packets) {
-    while (stream.retained_bytes > capacity_bytes && !stream.packets.empty()) {
-        auto oldest = stream.packets.begin();
-        stream.retained_bytes -= PacketBytes(oldest->second);
-        stream.packets.erase(oldest);
-        if (evicted_packets) {
-            ++*evicted_packets;
+void EraseFront(StreamState& stream, uint64_t* evicted_packets) {
+    if (stream.packets.empty()) {
+        return;
+    }
+    auto oldest = stream.packets.begin();
+    stream.retained_bytes -= PacketBytes(oldest->second);
+    stream.packets.erase(oldest);
+    if (evicted_packets) {
+        ++*evicted_packets;
+    }
+}
+
+size_t RetainedBytes(const std::vector<StreamState>& streams) {
+    size_t total = 0;
+    for (const StreamState& stream : streams) {
+        total += stream.retained_bytes;
+    }
+    return total;
+}
+
+void EvictToCapacity(std::vector<StreamState>& streams, const size_t capacity_bytes, uint64_t* evicted_packets) {
+    // OBS's replay_buffer output applies max_size_mb to one shared packet
+    // queue. Keep the plugin's equivalent budget shared across all streams and
+    // evict a common temporal prefix so a later stream never shifts into an
+    // earlier stream's missing slot.
+    while (RetainedBytes(streams) > capacity_bytes) {
+        std::optional<uint64_t> oldest_cts;
+        for (const StreamState& stream : streams) {
+            if (!stream.packets.empty()) {
+                oldest_cts = oldest_cts ? std::min(*oldest_cts, stream.packets.begin()->first)
+                                         : stream.packets.begin()->first;
+            }
+        }
+        if (!oldest_cts) {
+            break;
+        }
+        for (StreamState& stream : streams) {
+            while (!stream.packets.empty() && stream.packets.begin()->first <= *oldest_cts) {
+                EraseFront(stream, evicted_packets);
+            }
         }
     }
 
-    // A replay snapshot may start only at a keyframe. Discard a partial GOP
-    // exposed by capacity eviction so the ring's oldest usable packet remains
-    // decodable without retaining an unbounded pre-keyframe tail.
-    while (!stream.packets.empty() && !stream.packets.begin()->second->packet.keyframe) {
-        auto oldest = stream.packets.begin();
-        stream.retained_bytes -= PacketBytes(oldest->second);
-        stream.packets.erase(oldest);
-        if (evicted_packets) {
-            ++*evicted_packets;
+    // A replay snapshot may start only at a keyframe. Discard partial GOPs
+    // exposed by capacity eviction from every stream.
+    for (StreamState& stream : streams) {
+        while (!stream.packets.empty() && !stream.packets.begin()->second->packet.keyframe) {
+            EraseFront(stream, evicted_packets);
         }
     }
 }
@@ -178,11 +207,8 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
             stream.has_source_cts = true;
             state_->retained_bytes += PacketBytes(owned_packet);
             state_->peak_retained_bytes = std::max(state_->peak_retained_bytes, state_->retained_bytes);
-            EvictToCapacity(stream, state_->config.ring_capacity_bytes, &state_->evicted_packet_count);
-            state_->retained_bytes = 0;
-            for (const StreamState& current : state_->streams) {
-                state_->retained_bytes += current.retained_bytes;
-            }
+            EvictToCapacity(state_->streams, state_->config.ring_capacity_bytes, &state_->evicted_packet_count);
+            state_->retained_bytes = RetainedBytes(state_->streams);
         }
         consumers = state_->consumers;
     }
@@ -195,6 +221,16 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
         }
     }
     return true;
+}
+
+void SynchronizedCaptureSession::SetRingCapacityBytes(const size_t capacity_bytes) noexcept {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->config.ring_capacity_bytes = capacity_bytes;
+    if (!state_->replay_retention_enabled) {
+        return;
+    }
+    EvictToCapacity(state_->streams, capacity_bytes, &state_->evicted_packet_count);
+    state_->retained_bytes = RetainedBytes(state_->streams);
 }
 
 void SynchronizedCaptureSession::SetReplayRetentionEnabled(const bool enabled) noexcept {

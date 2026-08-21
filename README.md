@@ -22,6 +22,8 @@ with the copyable configure, build, portable deployment, and debugging workflow 
   OBS deployment, runtime validation, and debugging;
 - [`docs/research-runtime.md`](docs/research-runtime.md): clean stock-OBS research
   runtime and deterministic synthetic scene bootstrap;
+- [`docs/replay-configuration.md`](docs/replay-configuration.md): OBS Replay Buffer
+  profile keys, availability policy, refresh lifecycle, and shared memory bound;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
   request, and squash-merge conventions.
 

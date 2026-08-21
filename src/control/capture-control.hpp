@@ -94,6 +94,7 @@ class CaptureControlEngine final {
     ControlCommandResult StartReplay();
     ControlCommandResult StopReplay();
     ControlCommandResult SaveReplay(std::vector<std::filesystem::path> paths);
+    ControlCommandResult ApplyReplayConfiguration(ReplayConfiguration configuration);
     void PollReplaySave() noexcept;
     void WaitForReplaySave() noexcept;
     void Shutdown() noexcept;
@@ -102,6 +103,7 @@ class CaptureControlEngine final {
     CaptureInfrastructureState capture_state() const noexcept;
     RecordingConsumerState recording_state() const noexcept;
     ReplayConsumerState replay_state() const noexcept;
+    bool replay_available() const noexcept;
     size_t active_encoder_count() const noexcept;
     uint64_t capture_epoch() const noexcept;
     std::optional<SynchronizedRecordingConsumerResult> recording_result() const;

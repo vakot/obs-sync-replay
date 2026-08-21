@@ -108,6 +108,9 @@ ControlCommandResult CaptureControlEngine::StartReplay() {
     if (!initialized_) {
         return Invalid("not-initialized");
     }
+    if (!configuration_.replay.enabled) {
+        return Invalid("replay-unavailable-by-obs-config");
+    }
     if (replay_state_ == ReplayConsumerState::Starting || replay_state_ == ReplayConsumerState::Running ||
         replay_state_ == ReplayConsumerState::Saving) {
         return {ControlCommandStatus::NoOp, "replay-already-active"};
@@ -153,6 +156,9 @@ ControlCommandResult CaptureControlEngine::StopReplay() {
 }
 
 ControlCommandResult CaptureControlEngine::SaveReplay(std::vector<std::filesystem::path> paths) {
+    if (!configuration_.replay.enabled) {
+        return Invalid("replay-unavailable-by-obs-config");
+    }
     if (replay_state_ == ReplayConsumerState::Off) {
         return Invalid("replay-not-active");
     }
@@ -171,7 +177,7 @@ ControlCommandResult CaptureControlEngine::SaveReplay(std::vector<std::filesyste
     if (!replay_consumer_) {
         replay_consumer_ = std::make_unique<SynchronizedReplayConsumer>(capture_, replay_save_delay_ms_);
     }
-    if (!replay_consumer_->RequestSave(std::move(paths), configuration_.replay_duration_ns,
+    if (!replay_consumer_->RequestSave(std::move(paths), configuration_.replay.target_duration_ns,
                                        SelectedCaptureIds(CaptureConsumer::Replay))) {
         const std::string reason = replay_consumer_->last_request_error();
         return {ControlCommandStatus::Failed,
@@ -179,6 +185,21 @@ ControlCommandResult CaptureControlEngine::SaveReplay(std::vector<std::filesyste
     }
     replay_state_ = ReplayConsumerState::Saving;
     return {ControlCommandStatus::Succeeded, "replay-save-started"};
+}
+
+ControlCommandResult CaptureControlEngine::ApplyReplayConfiguration(ReplayConfiguration configuration) {
+    const bool was_active = IsReplayActive(replay_state_);
+    if (was_active && !configuration.enabled) {
+        const ControlCommandResult stop_result = StopReplay();
+        if (!stop_result.ok()) {
+            return {ControlCommandStatus::Failed, "replay-config-stop-failed"};
+        }
+    }
+
+    configuration_.replay = configuration;
+    capture_.SetRingCapacityBytes(configuration.memory_budget_bytes);
+    return {ControlCommandStatus::Succeeded, was_active && !configuration.enabled ? "replay-disabled-and-stopped"
+                                                                                   : "replay-config-applied"};
 }
 
 void CaptureControlEngine::WaitForReplaySave() noexcept {
@@ -234,6 +255,10 @@ RecordingConsumerState CaptureControlEngine::recording_state() const noexcept {
 
 ReplayConsumerState CaptureControlEngine::replay_state() const noexcept {
     return replay_state_;
+}
+
+bool CaptureControlEngine::replay_available() const noexcept {
+    return configuration_.replay.enabled;
 }
 
 size_t CaptureControlEngine::active_encoder_count() const noexcept {
