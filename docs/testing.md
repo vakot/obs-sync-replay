@@ -70,6 +70,12 @@ As components appear, cover:
 Prefer injected ticks and deterministic fake render/encoder completions. Tests must
 not depend on sleeps to create ordering.
 
+Phase 5 adds `synchronized-recording-session-test`. It covers owned compressed
+packet copies, bounded capacity, asymmetric startup, no-common-keyframe behavior,
+common-end selection, reordered PTS/DTS, transactional startup rollback, delayed
+stop/drain finalization, and identical selected A/B source ranges. The test uses
+injected packets and fake sinks; it does not use OBS runtime state.
+
 ### Phase 3 retained-pipeline coverage
 
 `synchronized-frame-queue-test` is OBS-independent and covers one complete pair,
@@ -86,6 +92,21 @@ When libobs and encoder integration exists, verify lifecycle, ownership, thread 
 render cadence, PTS propagation, and mux boundaries. Force completion reordering and
 encoder delay where the harness permits. Inspect decoded frames and container timing,
 not just in-memory expectations.
+
+The Phase 5 research runner uses stock `null_output` only as a compressed-packet
+source. The plugin-owned `MkvPacketSink` receives copied packet payloads and codec
+extradata, retains a bounded decode-reorder buffer, and commits each stream only
+after the session has selected the same common range for both outputs. Runtime
+success requires one common start and end CTS, equal selected source bounds, zero
+range mismatches, and successful finalization for both files. The current normal-
+Recording slice retains the compressed window until stop so late encoder callbacks
+cannot move an already-muxed packet; capacity exhaustion fails explicitly and is a
+known limitation for recordings longer than the configured bounded window.
+
+On 2026-08-21, a clean portable smoke run completed both x264 and NVENC H.264
+sessions with `state=stopped failure=none`. FFprobe decoded the resulting A/B MKVs;
+the x264 pair contained 173 frames each and the NVENC pair 182 frames each, with
+identical per-packet PTS/DTS/keyframe metadata within each pair.
 
 ### OBS end-to-end tests
 
