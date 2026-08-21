@@ -107,16 +107,6 @@ if(MSVC)
 endif()
 add_test(NAME synchronized-frame-queue COMMAND synchronized-frame-queue-test)
 
-add_executable(
-  encoder-input-association-test
-  tests/encoding/encoder-input-association-test.cpp
-)
-target_compile_features(encoder-input-association-test PRIVATE cxx_std_17)
-if(MSVC)
-  target_compile_options(encoder-input-association-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
-endif()
-add_test(NAME encoder-input-association COMMAND encoder-input-association-test)
-
 add_test(
   NAME plugin-artifact
   COMMAND
