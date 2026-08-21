@@ -514,4 +514,199 @@ first/last CTS values, fail closed on any mismatch, and use a common decodable
 keyframe/GOP boundary unless the chosen libavformat/MKV playback contract proves
 arbitrary-frame pre-roll/end handling.
 
-Conclusion: C. KEYFRAME-ALIGNED ONLY.
+The preceding architecture experiment established that common decodable
+keyframe/GOP boundaries are the safe stock-OBS product boundary. The packet-range
+POC below tests that boundary end to end.
+
+## Synchronized packet-range MKV POC
+
+This POC uses the existing clean deterministic Scene A/Scene B bootstrap and the
+same two plugin-owned OBS views/video pipelines. It creates two stock native video
+encoders, captures their compressed packets through stock `null_output` packet
+callbacks, selects one common source-CTS interval, and writes two separate MKV
+files with in-process libavformat. It does not use the patched association API,
+custom video encoders, decoding, re-encoding, or raw-frame CPU readback.
+
+### 1. Packet capture topology
+
+```text
+Scene A -> plugin-owned view/video_t -> stock encoder A -> stock null_output -> packet capture A
+Scene B -> plugin-owned view/video_t -> stock encoder B -> stock null_output -> packet capture B
+                                                               |                    |
+                                                               `-> common CTS range -'
+                                                                      |
+                                                               libavformat/MKV A/B
+```
+
+The POC runs independently for `obs_x264` and `obs_nvenc_h264_tex`. A/B settings
+are created explicitly and identically within each encoder run: 4000 kbps CBR,
+one-second keyframe interval, H.264 High profile, x264 `ultrafast` or NVENC `p1`,
+and NVENC two B-frames. The stock null output requires an audio encoder by its
+public output contract; two stock AAC encoders are attached only to satisfy that
+contract and their packets are discarded. The POC muxes video only.
+
+### 2. Packet ownership
+
+The callback receives borrowed OBS packet memory. The POC immediately calls the
+public `obs_encoder_packet_ref()` and retains the referenced encoded payload,
+packet type, keyframe flag, PTS, DTS, packet timebase, and stream identity until
+both MKV files are finalized. It calls `obs_encoder_packet_release()` for every
+retained packet during teardown. Codec extradata is copied while the encoder is
+active from the packet's public encoder using `obs_encoder_get_extra_data()`;
+this is required because the accessor returned no data after stop in the first
+implementation attempt. No borrowed pointer survives the callback.
+
+### 3. Common-start algorithm
+
+Both encoders are started, then allowed to warm up for two seconds while all
+compressed packets are retained. The requested recording start is a root OBS CTS
+sampled after warm-up. `commonStartCTS` is the first CTS at or after that request
+for which both streams have a packet and both packets carry the keyframe flag.
+Packets before it are startup/pre-roll and are never submitted to either MKV.
+The algorithm matches by public source CTS; it does not assume that the first
+keyframe from A and B is naturally identical.
+
+### 4. Common-end algorithm
+
+The stop request samples one root OBS CTS before calling `obs_output_stop()` on
+either output. Both outputs are then allowed to drain completely. `commonEndCTS`
+is the greatest CTS no later than the requested stop for which both captures have
+a packet. All packets in the inclusive common CTS interval are selected, including
+non-keyframe tail packets. The selection is made from source CTS, never callback
+arrival order, and the two selected CTS sets must be identical or the POC fails
+closed.
+
+### 5. Keyframe handling
+
+Start is keyframe-aligned because the stock public API has no synchronous
+force-keyframe operation. End does not require a keyframe: the selected start
+keyframe establishes decoder state, and the final selected packets are retained in
+DTS order. The POC records head/tail discard counts and rejects any source-CTS set
+mismatch. This satisfies the product allowance to lose a small number of frames
+around requested boundaries.
+
+### 6. PTS/DTS/CTS transformation
+
+CTS remains the immutable source-range key and is logged for both streams. The
+selected packets are sorted by source encoder DTS for muxing. Each stream's local
+PTS/DTS is rebased by that stream's first selected PTS, then rescaled from the OBS
+packet timebase into the MKV stream timebase after `avformat_write_header()`.
+This last rescale is required because Matroska selected a 1/1000 timebase while
+OBS supplied a finer encoder timebase. B-frame decode order is preserved by DTS;
+presentation order is verified independently from decoded frame timestamps.
+
+### 7. Muxing implementation
+
+The POC uses in-process libavformat and the Matroska muxer. It creates one H.264
+video stream per file, supplies width/height, codec ID, copied encoder extradata,
+packet timebase, rebased/rescaled PTS/DTS, payload bytes, and keyframe flags, then
+writes the original compressed bitstream once. The repository links the FFmpeg
+libraries already shipped by the pinned OBS dependency bundle. No external
+`ffmpeg.exe` process is used during recording and no second video encoder is
+created.
+
+### 8. x264 results
+
+Evidence log: [`2026-08-21 17-03-13.txt`](../obs-dev/config/obs-studio/logs/2026-08-21%2017-03-13.txt).
+
+The five-second run selected:
+
+```text
+commonStartCTS = 22206959549970
+commonEndCTS   = 22211526216454
+first CTS A/B  = 22206959549970 / 22206959549970
+last CTS A/B   = 22211526216454 / 22211526216454
+CTS mismatches = 0
+head packets   = 120 / 120
+tail packets   = 0 / 0
+muxed packets  = 275 / 275
+```
+
+Independent ffprobe validation reported 275 decoded frames in each file, duration
+4.567000 seconds in each file, and identical first/last decoded presentation
+timestamps. Decode-only ffmpeg validation returned no errors. DTS was monotonic;
+decoded presentation timestamps were monotonic and matched A/B with zero
+timestamp mismatches.
+
+### 9. NVENC results
+
+The same code path selected:
+
+```text
+commonStartCTS = 22216159549602
+commonEndCTS   = 22220909549412
+first CTS A/B  = 22216159549602 / 22216159549602
+last CTS A/B   = 22220909549412 / 22220909549412
+CTS mismatches = 0
+head packets   = 120 / 120
+tail packets   = 0 / 0
+muxed packets  = 285 / 285
+```
+
+Independent ffprobe validation reported 285 decoded frames in each file, duration
+4.750000 seconds in each file, and identical first/last decoded presentation
+timestamps. Decode-only ffmpeg validation returned no errors. Packet PTS appears
+out of order when inspected in DTS/decode order, as expected for B-frames; DTS was
+monotonic and decoded presentation timestamps were monotonic and matched A/B with
+zero timestamp mismatches. No NVENC-specific synchronization path was added.
+
+### 10. ffprobe/decode validation
+
+The four generated files were checked independently after the OBS process ended:
+
+| Pair | Frames A/B | Duration A/B | Packet PTS/DTS check | Decode check | Decoded PTS mismatches |
+| --- | ---: | ---: | --- | --- | ---: |
+| x264 | 275 / 275 | 4.567000 / 4.567000 s | DTS monotonic; B-frame PTS order expected | passed | 0 |
+| NVENC | 285 / 285 | 4.750000 / 4.750000 s | DTS monotonic; B-frame PTS order expected | passed | 0 |
+
+The source-CTS equality is proven by the structured OBS log; decoded frame count,
+duration, decode success, DTS ordering, and decoded presentation-timestamp
+alignment are proven independently by ffprobe/ffmpeg. Equal rebased PTS alone was
+not used as the synchronization proof.
+
+### 11. Resource cost
+
+The x264 run retained 6,484,704 compressed payload bytes across both streams,
+including 1,901,370 bytes of startup pre-roll. NVENC retained 6,750,012 bytes,
+including 2,000,012 bytes of startup pre-roll. The selected range itself was
+275 or 285 packets per stream. The POC performs two stock video encodes, packet
+reference/copy buffering, and two compressed MKV muxes; it performs no decode,
+raw-frame readback, or second encode. The code also records per-stream mux wall
+time. A follow-up three-second run logged x264 mux wall times of 2 ms and 1 ms
+for A/B, and NVENC times of 1 ms and 1 ms for A/B.
+
+### 12. Known limitations
+
+- The POC uses a bounded finite capture rather than a long-term replay ring.
+- Audio, Replay Buffer integration, normal OBS Recording settings inheritance,
+  UI, naming policy, recovery, and production configuration are excluded.
+- The selected common end is source-CTS exact for the captured packet interval;
+  arbitrary visible starts remain intentionally disallowed unless keyframe/GOP
+  semantics are explicitly extended and validated.
+- The ignored local OBS SDK/runtime retains the previously documented source/input
+  association additions, but the POC does not call those APIs. Stock provenance is
+  based on the public API usage and official OBS architecture; a clean official
+  binary rebuild remains a separate provenance hardening step.
+
+### 13. Production implications
+
+The end-to-end result supports a production architecture with continuously running
+stock encoders, a bounded compressed packet ring per scene, one common CTS range
+decision, fail-closed source-CTS validation, and plugin-owned libavformat/MKV
+writers. It preserves the required invariant:
+
+```text
+first_source_CTS[A] == first_source_CTS[B]
+last_source_CTS[A]  == last_source_CTS[B]
+frame_count[A]      == frame_count[B]
+duration[A]         == duration[B]
+relative_skew      == 0 frames
+```
+
+The POC demonstrates that this invariant can be enforced without modifying OBS,
+adding custom encoders, decoding, re-encoding, or reading raw frames back to the
+CPU. Production must retain the same common-CTS and codec-boundary validation and
+must reject a save when any required packet metadata or decodable boundary is
+missing.
+
+Result: A. PASS — PACKET-ONLY SYNCHRONIZED RECORDING PROVEN
