@@ -57,9 +57,9 @@ add_library(
   obs-sync-replay
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
-  src/experiment/packet-range-mkv-poc.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
   src/plugin/plugin-main.cpp
+  src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
@@ -67,6 +67,7 @@ add_library(
 target_link_libraries(
   obs-sync-replay
   PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
+          obs-sync-replay-recording obs-sync-replay-muxing
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")

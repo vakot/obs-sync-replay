@@ -1,5 +1,6 @@
 #include "experiment/stock-encoder-timeline-probe.hpp"
-#include "experiment/packet-range-mkv-poc.hpp"
+
+#include "recording/obs-synchronized-recording.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -662,8 +663,8 @@ void StockEncoderTimelineProbe::Run() {
         }
 
         if (stop_requested_ || config.long_run_seconds == 0) {
-            RunPacketRangeMkvPoc(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
-                                 config.poc_warmup_ms);
+            RunSynchronizedRecording(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
+                                     config.poc_warmup_ms);
             continue;
         }
 
@@ -794,8 +795,8 @@ void StockEncoderTimelineProbe::Run() {
         if (audio_encoder_a) obs_encoder_release(audio_encoder_a);
         if (audio_encoder_b) obs_encoder_release(audio_encoder_b);
 
-        RunPacketRangeMkvPoc(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
-                             config.poc_warmup_ms);
+        RunSynchronizedRecording(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
+                                 config.poc_warmup_ms);
     }
 
     blog(LOG_INFO,
