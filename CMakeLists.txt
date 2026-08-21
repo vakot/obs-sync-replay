@@ -34,6 +34,7 @@ add_library(
   obs-sync-replay
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
+  src/experiment/stock-encoder-timeline-probe.cpp
   src/plugin/plugin-main.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
