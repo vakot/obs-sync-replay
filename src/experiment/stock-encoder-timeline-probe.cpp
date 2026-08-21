@@ -1,4 +1,5 @@
 #include "experiment/stock-encoder-timeline-probe.hpp"
+#include "experiment/packet-range-mkv-poc.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -109,6 +110,8 @@ struct ProbeConfig final {
     uint32_t long_run_seconds = kDefaultLongRunSeconds;
     uint32_t cycle_warmup_ms = kDefaultCycleWarmupMilliseconds;
     uint32_t epoch_tick_stride = 30;
+    uint32_t poc_duration_seconds = 5;
+    uint32_t poc_warmup_ms = 2000;
 };
 
 uint32_t ReadEnvironmentUint(const char* name, const uint32_t fallback) {
@@ -145,6 +148,10 @@ ProbeConfig ReadConfig() {
         ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_CYCLE_WARMUP_MS", kDefaultCycleWarmupMilliseconds);
     config.epoch_tick_stride =
         ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_EPOCH_TICK_STRIDE", 30);
+    config.poc_duration_seconds =
+        ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_POC_SECONDS", 5);
+    config.poc_warmup_ms =
+        ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_POC_WARMUP_MS", 2000);
     return config;
 }
 
@@ -497,9 +504,11 @@ void StockEncoderTimelineProbe::Run() {
     const ProbeConfig config = ReadConfig();
     blog(LOG_INFO,
          "[stock-probe] begin clean_runtime=true encoder_ids=%s,%s boundary_cycles=%u long_run_seconds=%u "
-         "cycle_warmup_ms=%u source_frame_id_identity=unobservable source_cts_identity=encoder_packet_time_cts "
+         "cycle_warmup_ms=%u poc_seconds=%u poc_warmup_ms=%u source_frame_id_identity=unobservable "
+         "source_cts_identity=encoder_packet_time_cts "
          "lag_injector=unavailable",
-         kX264EncoderId, kNvencEncoderId, config.boundary_cycles, config.long_run_seconds, config.cycle_warmup_ms);
+         kX264EncoderId, kNvencEncoderId, config.boundary_cycles, config.long_run_seconds, config.cycle_warmup_ms,
+         config.poc_duration_seconds, config.poc_warmup_ms);
     blog(LOG_INFO, "[stock-probe] output-harness id=%s purpose=satisfy-stock-null-output-audio-flag "
                   "video-observations=filtered-to-OBS_ENCODER_VIDEO files_or_muxers=false",
          kAudioEncoderId);
@@ -653,6 +662,8 @@ void StockEncoderTimelineProbe::Run() {
         }
 
         if (stop_requested_ || config.long_run_seconds == 0) {
+            RunPacketRangeMkvPoc(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
+                                 config.poc_warmup_ms);
             continue;
         }
 
@@ -782,6 +793,9 @@ void StockEncoderTimelineProbe::Run() {
         if (encoder_b) obs_encoder_release(encoder_b);
         if (audio_encoder_a) obs_encoder_release(audio_encoder_a);
         if (audio_encoder_b) obs_encoder_release(audio_encoder_b);
+
+        RunPacketRangeMkvPoc(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
+                             config.poc_warmup_ms);
     }
 
     blog(LOG_INFO,
