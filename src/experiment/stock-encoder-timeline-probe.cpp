@@ -56,6 +56,7 @@ struct PacketObservation final {
     uint64_t callback_root_pts = 0;
     uint32_t callback_root_frame_count = 0;
     uint32_t callback_root_lagged_frames = 0;
+    bool keyframe = false;
 };
 
 struct OutputCapture final {
@@ -65,6 +66,7 @@ struct OutputCapture final {
     uint64_t first_packet_wall_ns = 0;
     std::vector<PacketObservation> packets;
     std::map<int64_t, uint64_t> cts_by_pts;
+    std::map<uint64_t, PacketObservation> packets_by_source_cts;
     uint64_t start_call_wall_ns = 0;
     uint64_t start_call_root_pts = 0;
     uint32_t start_call_root_frame_count = 0;
@@ -87,13 +89,26 @@ struct ExperimentResult final {
     uint64_t packet_count_a = 0;
     uint64_t packet_count_b = 0;
     uint64_t packet_mapping_mismatches = 0;
+    uint64_t source_cts_mismatches = 0;
     uint64_t source_pts_gaps = 0;
+};
+
+struct RootEpochObservation final {
+    uint64_t source_cts = 0;
+    uint32_t root_frame_count = 0;
+};
+
+struct RootEpochCapture final {
+    uint32_t tick_stride = 30;
+    uint32_t tick_count = 0;
+    std::vector<RootEpochObservation> observations;
 };
 
 struct ProbeConfig final {
     uint32_t boundary_cycles = kDefaultBoundaryCycles;
     uint32_t long_run_seconds = kDefaultLongRunSeconds;
     uint32_t cycle_warmup_ms = kDefaultCycleWarmupMilliseconds;
+    uint32_t epoch_tick_stride = 30;
 };
 
 uint32_t ReadEnvironmentUint(const char* name, const uint32_t fallback) {
@@ -128,6 +143,8 @@ ProbeConfig ReadConfig() {
         ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_LONG_RUN_SECONDS", kDefaultLongRunSeconds);
     config.cycle_warmup_ms =
         ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_CYCLE_WARMUP_MS", kDefaultCycleWarmupMilliseconds);
+    config.epoch_tick_stride =
+        ReadEnvironmentUint("OBS_SYNC_REPLAY_PROBE_EPOCH_TICK_STRIDE", 30);
     return config;
 }
 
@@ -162,9 +179,11 @@ void OnOutputPacket(obs_output_t*, struct encoder_packet* packet, struct encoder
                                         WallClockNs(),
                                         obs_get_video_frame_time(),
                                         obs_get_total_frames(),
-                                        obs_get_lagged_frames()};
+                                        obs_get_lagged_frames(),
+                                        packet->keyframe};
     capture->packets.push_back(observation);
     capture->cts_by_pts[observation.pts] = observation.cts;
+    capture->packets_by_source_cts[observation.cts] = observation;
     if (capture->first_packet_wall_ns == 0) {
         capture->first_packet_wall_ns = WallClockNs();
     }
@@ -174,15 +193,30 @@ void OnOutputPacket(obs_output_t*, struct encoder_packet* packet, struct encoder
         blog(LOG_INFO,
              "[stock-probe] packet-sample output=%s packet=%llu local_pts=%lld local_dts=%lld "
              "packet_cts=%llu encoder_fer=%llu encoder_ferc=%llu encoder_pir=%llu "
-             "callback_root_pts=%llu callback_root_frame_count=%u callback_root_lagged_frames=%u",
+             "callback_root_pts=%llu callback_root_frame_count=%u callback_root_lagged_frames=%u keyframe=%s",
              capture->output ? capture->output : "unknown",
              static_cast<unsigned long long>(capture->packets.size()), static_cast<long long>(observation.pts),
              static_cast<long long>(observation.dts), static_cast<unsigned long long>(observation.cts),
              static_cast<unsigned long long>(observation.fer), static_cast<unsigned long long>(observation.ferc),
              static_cast<unsigned long long>(observation.pir),
              static_cast<unsigned long long>(observation.callback_root_pts), observation.callback_root_frame_count,
-             observation.callback_root_lagged_frames);
+             observation.callback_root_lagged_frames, observation.keyframe ? "true" : "false");
     }
+}
+
+void OnRootTick(void* param, float) {
+    auto* capture = static_cast<RootEpochCapture*>(param);
+    if (!capture) {
+        return;
+    }
+
+    ++capture->tick_count;
+    if (capture->tick_count % capture->tick_stride != 0) {
+        return;
+    }
+
+    capture->observations.push_back(
+        RootEpochObservation{obs_get_video_frame_time(), obs_get_total_frames()});
 }
 
 void CaptureRootSample(OutputCapture* capture, const bool is_start) {
@@ -267,6 +301,18 @@ ExperimentResult CompareCaptures(const OutputCapture& capture_a, const OutputCap
     result.packet_count_b = capture_b.packet_count;
     result.source_pts_gaps = CountSourcePtsGaps(capture_a.cts_by_pts) + CountSourcePtsGaps(capture_b.cts_by_pts);
 
+    for (const auto& [source_cts, packet_a] : capture_a.packets_by_source_cts) {
+        const auto it = capture_b.packets_by_source_cts.find(source_cts);
+        if (it == capture_b.packets_by_source_cts.end()) {
+            ++result.source_cts_mismatches;
+        }
+    }
+    for (const auto& [source_cts, packet_b] : capture_b.packets_by_source_cts) {
+        if (capture_a.packets_by_source_cts.find(source_cts) == capture_a.packets_by_source_cts.end()) {
+            ++result.source_cts_mismatches;
+        }
+    }
+
     if (!capture_a.cts_by_pts.empty() && !capture_b.cts_by_pts.empty()) {
         result.first_observed_cts_a = capture_a.cts_by_pts.begin()->second;
         result.first_observed_cts_b = capture_b.cts_by_pts.begin()->second;
@@ -286,6 +332,74 @@ ExperimentResult CompareCaptures(const OutputCapture& capture_a, const OutputCap
     }
     result.packet_pts_cts_mapping_equal = result.packet_mapping_mismatches == 0 && result.packet_timing_available;
     return result;
+}
+
+struct EpochSummary final {
+    uint32_t attempts = 0;
+    uint32_t usable_attempts = 0;
+    uint32_t first_source_cts_equal = 0;
+    uint32_t first_source_cts_exactly_at_epoch = 0;
+    uint32_t common_keyframe_cts = 0;
+};
+
+const PacketObservation* FindFirstPacketAtOrAfter(const OutputCapture& capture, const uint64_t source_cts,
+                                                   const bool keyframe_only) {
+    for (auto it = capture.packets_by_source_cts.lower_bound(source_cts); it != capture.packets_by_source_cts.end();
+         ++it) {
+        if (!keyframe_only || it->second.keyframe) {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+EpochSummary AnalyzeRootEpochs(const char* encoder_id, const RootEpochCapture& epochs,
+                               const OutputCapture& capture_a, const OutputCapture& capture_b) {
+    EpochSummary summary;
+    summary.attempts = static_cast<uint32_t>(epochs.observations.size());
+    for (uint32_t i = 0; i < summary.attempts; ++i) {
+        const auto& epoch = epochs.observations[i];
+        const PacketObservation* first_a = FindFirstPacketAtOrAfter(capture_a, epoch.source_cts, false);
+        const PacketObservation* first_b = FindFirstPacketAtOrAfter(capture_b, epoch.source_cts, false);
+        const PacketObservation* key_a = FindFirstPacketAtOrAfter(capture_a, epoch.source_cts, true);
+        const PacketObservation* key_b = FindFirstPacketAtOrAfter(capture_b, epoch.source_cts, true);
+        if (!first_a || !first_b) {
+            continue;
+        }
+
+        ++summary.usable_attempts;
+        const bool first_equal = first_a->cts == first_b->cts;
+        if (first_equal) {
+            ++summary.first_source_cts_equal;
+        }
+        if (first_equal && first_a->cts == epoch.source_cts) {
+            ++summary.first_source_cts_exactly_at_epoch;
+        }
+        if (key_a && key_b && key_a->cts == key_b->cts) {
+            ++summary.common_keyframe_cts;
+        }
+
+        if (i < 3 || i % 25 == 0) {
+            blog(LOG_INFO,
+                 "[stock-probe] epoch-sample encoder=%s attempt=%u root_epoch_cts=%llu root_frame_count=%u "
+                 "first_packet_cts_a=%llu first_packet_cts_b=%llu first_packet_cts_equal=%s "
+                 "first_packet_keyframe_a=%s first_packet_keyframe_b=%s common_keyframe_cts=%llu",
+                 encoder_id, i + 1, static_cast<unsigned long long>(epoch.source_cts), epoch.root_frame_count,
+                 static_cast<unsigned long long>(first_a->cts), static_cast<unsigned long long>(first_b->cts),
+                 first_equal ? "true" : "false", first_a->keyframe ? "true" : "false",
+                 first_b->keyframe ? "true" : "false",
+                 key_a && key_b && key_a->cts == key_b->cts ? static_cast<unsigned long long>(key_a->cts) : 0ULL);
+        }
+    }
+
+    blog(LOG_INFO,
+         "[stock-probe] epoch-result encoder=%s attempts=%u usable_attempts=%u first_source_cts_equal=%u "
+         "first_source_cts_exactly_at_epoch=%u common_keyframe_cts=%u "
+         "root_epoch_identity=public-obs_add_tick_callback-plus-encoder_packet_time_cts "
+         "forced_keyframe_api=unavailable-public-stock-api",
+         encoder_id, summary.attempts, summary.usable_attempts, summary.first_source_cts_equal,
+         summary.first_source_cts_exactly_at_epoch, summary.common_keyframe_cts);
+    return summary;
 }
 
 } // namespace
@@ -342,7 +456,7 @@ bool StockEncoderTimelineProbe::Start() {
     blog(LOG_INFO,
          "[stock-probe] setup-complete view_a=SceneA view_b=SceneB topology=two-views-two-video_t-two-encoders "
          "activation=stock-null-output packet_identity=public-encoder-packet-time-only "
-         "source_frame_id_observable=false patched_association_api_used=false");
+         "source_frame_id_observable=false source_cts_identity_observable=true patched_association_api_used=false");
     stop_requested_ = false;
     worker_ = std::thread(&StockEncoderTimelineProbe::Run, this);
     return true;
@@ -383,7 +497,8 @@ void StockEncoderTimelineProbe::Run() {
     const ProbeConfig config = ReadConfig();
     blog(LOG_INFO,
          "[stock-probe] begin clean_runtime=true encoder_ids=%s,%s boundary_cycles=%u long_run_seconds=%u "
-         "cycle_warmup_ms=%u source_slot_identity=unobservable_without_patched_api lag_injector=unavailable",
+         "cycle_warmup_ms=%u source_frame_id_identity=unobservable source_cts_identity=encoder_packet_time_cts "
+         "lag_injector=unavailable",
          kX264EncoderId, kNvencEncoderId, config.boundary_cycles, config.long_run_seconds, config.cycle_warmup_ms);
     blog(LOG_INFO, "[stock-probe] output-harness id=%s purpose=satisfy-stock-null-output-audio-flag "
                   "video-observations=filtered-to-OBS_ENCODER_VIDEO files_or_muxers=false",
@@ -499,8 +614,9 @@ void StockEncoderTimelineProbe::Run() {
                      "[stock-probe] activation-result encoder=%s strategy=%s cycle=%u started_a=%s started_b=%s "
                      "first_observed_packet_cts_a=%llu first_observed_packet_cts_b=%llu first_cts_equal=%s "
                      "packet_count_a=%llu packet_count_b=%llu packet_pts_cts_mismatches=%llu "
-                     "packet_cts_mapping_equal=%s packet_timing_available=%s source_pts_gaps=%llu "
-                     "source_slot_identity_proven=false stop_order=%s "
+                     "packet_cts_mapping_equal=%s packet_timing_available=%s source_cts_mismatches=%llu "
+                     "source_cts_mapping_equal=%s source_pts_gaps=%llu "
+                     "source_frame_id_identity_proven=false source_cts_identity_observed=true stop_order=%s "
                      "start_root_frame_count_a=%u start_root_frame_count_b=%u "
                      "stop_root_frame_count_a=%u stop_root_frame_count_b=%u "
                      "last_packet_pts_a=%lld last_packet_pts_b=%lld",
@@ -513,6 +629,8 @@ void StockEncoderTimelineProbe::Run() {
                      static_cast<unsigned long long>(result.packet_mapping_mismatches),
                      result.packet_pts_cts_mapping_equal ? "true" : "false",
                      result.packet_timing_available ? "true" : "false",
+                     static_cast<unsigned long long>(result.source_cts_mismatches),
+                     result.source_cts_mismatches == 0 ? "true" : "false",
                      static_cast<unsigned long long>(result.source_pts_gaps), stop_b_first ? "B_then_A" : "A_then_B",
                      capture_a.start_call_root_frame_count, capture_b.start_call_root_frame_count,
                      capture_a.stop_call_root_frame_count, capture_b.stop_call_root_frame_count,
@@ -556,6 +674,8 @@ void StockEncoderTimelineProbe::Run() {
         obs_output_t* output_b = obs_output_create(kNullOutputId, "Stock Probe Long Output B", nullptr, nullptr);
         OutputCapture capture_a{"long-A"};
         OutputCapture capture_b{"long-B"};
+        RootEpochCapture epoch_capture;
+        epoch_capture.tick_stride = config.epoch_tick_stride;
         obs_encoder_group_t* group = nullptr;
         bool ready = encoder_a && encoder_b && audio_encoder_a && audio_encoder_b && output_a && output_b;
         if (ready) {
@@ -575,9 +695,10 @@ void StockEncoderTimelineProbe::Run() {
 
         blog(LOG_INFO,
              "[stock-probe] long-run-begin encoder=%s seconds=%u strategy=grouped program_scene_switch=true "
-             "canonical_obs_pts=%llu obs_root_frame_count=%u obs_lagged_frames=%u",
+             "canonical_obs_pts=%llu obs_root_frame_count=%u obs_lagged_frames=%u epoch_tick_stride=%u "
+             "forced_keyframe_api=unavailable-public-stock-api",
              encoder_id, config.long_run_seconds, static_cast<unsigned long long>(obs_get_video_frame_time()),
-             obs_get_total_frames(), obs_get_lagged_frames());
+             obs_get_total_frames(), obs_get_lagged_frames(), config.epoch_tick_stride);
         bool started_a = false;
         bool started_b = false;
         if (ready) {
@@ -589,6 +710,7 @@ void StockEncoderTimelineProbe::Run() {
             }
         }
         if (started_a && started_b) {
+            obs_add_tick_callback(OnRootTick, &epoch_capture);
             obs_source_t* scene_a = state_->scene_a;
             obs_source_t* scene_b = state_->scene_b;
             const auto start = std::chrono::steady_clock::now();
@@ -603,6 +725,7 @@ void StockEncoderTimelineProbe::Run() {
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            obs_remove_tick_callback(OnRootTick, &epoch_capture);
             CaptureRootSample(&capture_a, false);
             CaptureRootSample(&capture_b, false);
             obs_output_stop(output_a);
@@ -610,11 +733,13 @@ void StockEncoderTimelineProbe::Run() {
             WaitForOutputInactive(output_a);
             WaitForOutputInactive(output_b);
             const ExperimentResult result = CompareCaptures(capture_a, capture_b);
+            AnalyzeRootEpochs(encoder_id, epoch_capture, capture_a, capture_b);
             blog(result.packet_pts_cts_mapping_equal ? LOG_INFO : LOG_WARNING,
                  "[stock-probe] long-run-result encoder=%s duration_seconds=%u packet_count_a=%llu packet_count_b=%llu "
                  "first_observed_packet_cts_a=%llu first_observed_packet_cts_b=%llu packet_pts_cts_mismatches=%llu "
-                 "packet_cts_mapping_equal=%s source_pts_gaps=%llu obs_lagged_frames=%u "
-                 "source_slot_identity_proven=false "
+                 "packet_cts_mapping_equal=%s source_cts_mismatches=%llu source_cts_mapping_equal=%s "
+                 "source_pts_gaps=%llu obs_lagged_frames=%u "
+                 "source_frame_id_identity_proven=false source_cts_identity_observed=true "
                  "start_root_frame_count_a=%u start_root_frame_count_b=%u "
                  "stop_root_frame_count_a=%u stop_root_frame_count_b=%u "
                  "last_packet_pts_a=%lld last_packet_pts_b=%lld",
@@ -624,6 +749,8 @@ void StockEncoderTimelineProbe::Run() {
                  static_cast<unsigned long long>(result.first_observed_cts_b),
                  static_cast<unsigned long long>(result.packet_mapping_mismatches),
                  result.packet_pts_cts_mapping_equal ? "true" : "false",
+                 static_cast<unsigned long long>(result.source_cts_mismatches),
+                 result.source_cts_mismatches == 0 ? "true" : "false",
                  static_cast<unsigned long long>(result.source_pts_gaps), obs_get_lagged_frames(),
                  capture_a.start_call_root_frame_count, capture_b.start_call_root_frame_count,
                  capture_a.stop_call_root_frame_count, capture_b.stop_call_root_frame_count,
@@ -657,7 +784,9 @@ void StockEncoderTimelineProbe::Run() {
         if (audio_encoder_b) obs_encoder_release(audio_encoder_b);
     }
 
-    blog(LOG_INFO, "[stock-probe] complete decision_basis=public_packet_cts_only exact_source_slot_proof=false");
+    blog(LOG_INFO,
+         "[stock-probe] complete decision_basis=public_root_tick_plus_encoder_packet_cts "
+         "source_frame_id_proof=false source_cts_identity_observed=true");
 }
 
 } // namespace obs_sync_replay
