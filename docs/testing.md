@@ -242,18 +242,29 @@ mixed Master/Scene A/Scene B modes, disabled streams, total-idle release, and fr
 capture-epoch creation. The test also verifies that Recording-only capture does not
 retain replay packets.
 
-The runtime harness uses the same control API. Set
-`OBS_SYNC_REPLAY_THREE_STREAM_SEQUENCE` to `A`, `B`, `C`, or `D` for the deterministic
-sequences in the Phase 7 brief, and set
-`OBS_SYNC_REPLAY_THREE_STREAM_MODES` to three comma-separated values such as
-`both,recording,replay` for mixed-mode validation. For the default `both,both,both`
-configuration, logs must show three active video encoders during Recording-only,
-Replay-only, and concurrent operation; `encoder-retain` events must appear when a
-consumer handoff keeps an encoder alive, and active count must reach zero only after
-both consumers stop. Runtime output validation remains the Phase 6 requirement:
-selected Recording or Replay trios must preserve one common source-CTS range and
-equal PTS/DTS/keyframe signatures for every participating stream.
+For the default `both,both,both` configuration, control tests must show three active
+video encoders during Recording-only, Replay-only, and concurrent operation;
+`encoder-retain` events must appear when a consumer handoff keeps an encoder alive,
+and active count must reach zero only after both consumers stop. Runtime output
+validation remains the Phase 6 requirement: selected Recording or Replay trios must
+preserve one common source-CTS range and equal PTS/DTS/keyframe signatures for every
+participating stream.
 
-The OBS harness also logs creation before activation for every non-disabled stream.
+### Phase 7 plugin-owned UI validation
+
+The product plugin must load with Recording and Replay inactive and zero active
+plugin-owned video encoders. The supported frontend dock exposes Start/Stop
+Recording, Start/Stop Replay Buffer, and Save Replay; its labels and enabled state
+are derived from `CaptureControlEngine` state. Plugin frontend hotkeys invoke the
+same runtime toggle/save methods as the dock. Stock OBS Recording and Replay Buffer
+buttons and lifecycle events are not used as product state.
+
+On shutdown, the dock is disabled before both consumers are stopped, replay saves
+are joined, encoders reach zero, hotkeys are unregistered, and the dock/views are
+released. A manual acceptance run should verify Recording-only, Replay-only,
+overlap/handoff, repeated Save Replay, and graceful close for the deterministic
+Master/Scene A/Scene B `Both` configuration.
+
+The product runtime also logs creation before activation for every non-disabled stream.
 This is expected: resources are pre-created to keep the OBS encoder group complete,
 while only aggregate-demand streams contribute active output and packet callbacks.

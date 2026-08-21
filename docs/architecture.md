@@ -382,18 +382,22 @@ product contract and should normally be rejected.
 
 ## Bootstrap Integration Baseline
 
+The following section records the earlier Phase 5 stock-output research baseline;
+the active Phase 7 product path is the plugin-owned control runtime described below.
+
 The initial module is built against the official OBS Studio 32.2.1 source tag and the
 official 2026-07-15 Windows x64 dependency bundle. CMake builds and installs only the
 matching `libobs` development target into ignored local state before building the
 plugin. This mirrors the dependency model used by the official OBS plugin template
 while keeping the repository independent of an installed OBS SDK.
 
-The runtime module owns the master-frame coordinator, synchronous dual-scene
-renderers, and the bounded retained GPU-pair pipeline. The Phase 5 research Recording
-runner additionally owns two stock native OBS encoder/output lifecycles, the
-transactional compressed-packet session, and two plugin-owned MKV sinks. It does not
-patch OBS or introduce a second encoder. Replay Buffer, Save Replay, normal OBS
-hotkeys, and settings inheritance remain outside this phase.
+The earlier research runtime owned the master-frame coordinator, synchronous
+dual-scene renderers, and the bounded retained GPU-pair pipeline. Its Phase 5
+Recording runner additionally owned two stock native OBS encoder/output lifecycles,
+the transactional compressed-packet session, and two plugin-owned MKV sinks. That
+research path did not patch OBS or introduce a second encoder. Its lack of Replay
+Buffer, Save Replay, normal OBS hotkeys, and settings inheritance was a baseline
+limitation; Phase 7 now provides plugin-owned equivalents below.
 
 The Recording session starts both stock pipelines as a preparation step, buffers
 packets until a common keyframe CTS is observed, then opens both MKV sinks from that
@@ -485,7 +489,21 @@ Replay, while Recording receives only streams configured for Recording. Lifecycl
 diagnostics report encoder activation, retention by another consumer, and release
 with the active encoder count.
 
-The OBS development harness exercises deterministic sequences A--D through this
-control API and accepts `OBS_SYNC_REPLAY_THREE_STREAM_SEQUENCE` plus the comma-separated
-`OBS_SYNC_REPLAY_THREE_STREAM_MODES` environment setting. This remains a harness
-configuration boundary; persistent settings, UI, hotkeys, and audio are deferred.
+The product runtime is plugin-owned and initializes idle after frontend loading. It
+registers an owned `QDockWidget` through the supported
+`obs_frontend_add_custom_qdock` extension point and registers plugin-owned frontend
+hotkeys for Recording start/stop, Replay start/stop, and Save Replay. The dock and
+hotkeys call the same `PluginCaptureRuntime` control methods; neither uses stock OBS
+Recording or Replay Buffer state, buttons, or handlers. The deterministic stream
+configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
+
+The former scripted OBS development harness was removed from the product runtime;
+the control engine's deterministic unit tests remain the separate validation path.
+Persistent settings, final per-scene configuration, audio, and exact native-button
+placement remain deferred.
+
+The product idle invariant is checked at load: before any explicit dock or hotkey
+action, Recording and Replay are Off and the plugin-owned active encoder count is
+zero. Shutdown disables the dock, unregisters plugin hotkeys, stops both consumers,
+waits for active replay saves, drains capture, removes the dock, and releases the
+plugin-owned scene views and encoder group.
