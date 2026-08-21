@@ -31,6 +31,7 @@ enum class RecordingConsumerState : uint8_t {
 
 enum class ReplayConsumerState : uint8_t {
     Off,
+    Starting,
     Running,
     Saving,
     Stopping,

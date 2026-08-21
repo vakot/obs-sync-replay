@@ -11,10 +11,11 @@ The reproducible entry point is:
 Use `-SkipUpdateCheck` when the clean runtime should pass OBS's
 `--disable-updater` startup option.
 
-The product runtime registers its own dock and frontend hotkeys after loading, with
-no automatic Recording, Replay, or encoder activation. The old scripted control
+The product runtime installs plugin-owned Recording and Replay buttons into the
+native OBS controls area and registers frontend hotkeys after loading, with no
+automatic Recording, Replay, or encoder activation. The old scripted control
 harness is no longer part of the product module; control behavior is validated by
-the focused `capture-control-test` and by manual plugin interaction when desktop
+the focused control/UI-state tests and by manual plugin interaction when desktop
 automation is available.
 
 `run-obs-research.ps1` refuses to modify a running portable OBS process. It clears

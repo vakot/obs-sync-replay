@@ -489,21 +489,24 @@ Replay, while Recording receives only streams configured for Recording. Lifecycl
 diagnostics report encoder activation, retention by another consumer, and release
 with the active encoder count.
 
-The product runtime is plugin-owned and initializes idle after frontend loading. It
-registers an owned `QDockWidget` through the supported
-`obs_frontend_add_custom_qdock` extension point and registers plugin-owned frontend
-hotkeys for Recording start/stop, Replay start/stop, and Save Replay. The dock and
-hotkeys call the same `PluginCaptureRuntime` control methods; neither uses stock OBS
+The product runtime is plugin-owned and initializes idle after frontend loading. Its
+`ObsControlsAdapter` locates OBS 32.2.1's public Qt object structure at
+`controlsDock`, then replaces the `recordButton`, `replayBufferButton`, and
+`saveReplayButton` layout entries with plugin-owned buttons at the same indices. The
+stock widgets are hidden and retained, never destroyed or used as backend state, and
+are restored on teardown. The replacement buttons and plugin-owned frontend hotkeys
+call the same `PluginCaptureRuntime` control methods; neither uses stock OBS
 Recording or Replay Buffer state, buttons, or handlers. The deterministic stream
 configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
 
 The former scripted OBS development harness was removed from the product runtime;
 the control engine's deterministic unit tests remain the separate validation path.
-Persistent settings, final per-scene configuration, audio, and exact native-button
-placement remain deferred.
+Persistent settings, final per-scene configuration, audio, and Replay visibility based
+on the OBS Replay Buffer setting remain deferred. Native control lookup is isolated in
+the adapter because its object names and layout structure are OBS-version-sensitive.
 
-The product idle invariant is checked at load: before any explicit dock or hotkey
+The product idle invariant is checked at load: before any explicit UI or hotkey
 action, Recording and Replay are Off and the plugin-owned active encoder count is
-zero. Shutdown disables the dock, unregisters plugin hotkeys, stops both consumers,
-waits for active replay saves, drains capture, removes the dock, and releases the
-plugin-owned scene views and encoder group.
+zero. Shutdown disables plugin controls, restores the retained stock widgets,
+unregisters plugin hotkeys, stops both consumers, waits for active replay saves,
+drains capture, and releases the plugin-owned scene views and encoder group.

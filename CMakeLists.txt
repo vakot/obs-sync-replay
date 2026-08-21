@@ -92,7 +92,8 @@ add_library(
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
-  src/ui/plugin-control-dock.cpp
+  src/ui/capture-controls.cpp
+  src/ui/obs-controls-adapter.cpp
 )
 target_link_libraries(
   obs-sync-replay
@@ -204,6 +205,14 @@ if(MSVC)
 endif()
 add_test(NAME capture-control COMMAND capture-control-test)
 set_tests_properties(capture-control PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
+
+add_executable(capture-controls-state-test tests/ui/capture-controls-state-test.cpp)
+target_link_libraries(capture-controls-state-test PRIVATE obs-sync-replay-control)
+target_compile_features(capture-controls-state-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(capture-controls-state-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME capture-controls-state COMMAND capture-controls-state-test)
 
 add_test(
   NAME plugin-artifact

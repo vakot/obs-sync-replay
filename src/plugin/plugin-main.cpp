@@ -2,25 +2,23 @@
 #include <obs-hotkey.h>
 #include <obs-module.h>
 
-#include <QtWidgets/QDockWidget>
 #include <QtWidgets/QWidget>
 
 #include "bootstrap/deterministic-test-environment.hpp"
 #include "control/plugin-capture-runtime.hpp"
-#include "ui/plugin-control-dock.hpp"
+#include "ui/capture-controls.hpp"
+#include "ui/obs-controls-adapter.hpp"
 
 #include <atomic>
+#include <exception>
 #include <memory>
 
 namespace {
 
-constexpr char kControlDockId[] = "obsSyncReplayControlDock";
-constexpr char kControlDockTitle[] = "Synchronized Capture";
-
 std::unique_ptr<obs_sync_replay::DeterministicTestEnvironment> deterministic_test_environment;
 std::unique_ptr<obs_sync_replay::PluginCaptureRuntime> capture_runtime;
-obs_sync_replay::PluginControlDock* control_dock = nullptr;
-QDockWidget* control_dock_container = nullptr;
+std::unique_ptr<obs_sync_replay::ObsControlsAdapter> controls_adapter;
+std::unique_ptr<obs_sync_replay::CaptureControls> capture_controls;
 std::atomic<bool> shutdown_requested{false};
 bool frontend_registered = false;
 obs_hotkey_pair_id recording_hotkeys = OBS_INVALID_HOTKEY_PAIR_ID;
@@ -111,25 +109,24 @@ void UnregisterPluginHotkeys() {
 }
 
 void StopPluginOwnedRuntime(const char* boundary) {
-    if (!capture_runtime && !control_dock && !deterministic_test_environment) {
+    if (!capture_runtime && !capture_controls && !controls_adapter && !deterministic_test_environment) {
         return;
     }
     if (shutdown_requested.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    if (control_dock) {
-        control_dock->DisableControls();
+    if (capture_controls) {
+        capture_controls->DisableControls();
+    }
+    if (controls_adapter) {
+        controls_adapter->Restore();
     }
     UnregisterPluginHotkeys();
+    capture_controls.reset();
+    controls_adapter.reset();
     if (capture_runtime) {
         capture_runtime->Stop();
     }
-    if (control_dock_container) {
-        obs_frontend_remove_dock(kControlDockId);
-        delete control_dock_container;
-        control_dock_container = nullptr;
-    }
-    control_dock = nullptr;
     capture_runtime.reset();
     if (deterministic_test_environment) {
         deterministic_test_environment.reset();
@@ -165,23 +162,38 @@ void OnFrontendEvent(enum obs_frontend_event event, void*) {
         return;
     }
 
-    auto* dock = new QDockWidget(QString::fromUtf8(kControlDockTitle),
-                                 static_cast<QWidget*>(obs_frontend_get_main_window()));
-    dock->setObjectName(QString::fromUtf8(kControlDockId));
-    auto* widget = new obs_sync_replay::PluginControlDock(*capture_runtime, dock);
-    dock->setWidget(widget);
-    if (!obs_frontend_add_custom_qdock(kControlDockId, dock)) {
-        delete dock;
-        blog(LOG_ERROR, "[plugin-ui] dock-registration-failed id=%s", kControlDockId);
-        capture_runtime->Stop();
-        capture_runtime.reset();
-        return;
+    try {
+        controls_adapter = std::make_unique<obs_sync_replay::ObsControlsAdapter>(
+            static_cast<QWidget*>(obs_frontend_get_main_window()));
+        if (controls_adapter->Locate()) {
+            capture_controls = std::make_unique<obs_sync_replay::CaptureControls>(
+                *capture_runtime, controls_adapter->controls_parent());
+            if (!controls_adapter->Install(*capture_controls)) {
+                capture_controls.reset();
+                controls_adapter.reset();
+            }
+        } else {
+            controls_adapter.reset();
+        }
+    } catch (const std::exception& error) {
+        blog(LOG_ERROR, "[plugin-ui] integration failed with exception=%s", error.what());
+        if (controls_adapter) {
+            controls_adapter->Restore();
+        }
+        capture_controls.reset();
+        controls_adapter.reset();
+    } catch (...) {
+        blog(LOG_ERROR, "[plugin-ui] integration failed with unknown exception");
+        if (controls_adapter) {
+            controls_adapter->Restore();
+        }
+        capture_controls.reset();
+        controls_adapter.reset();
     }
-    dock->setVisible(true);
-    control_dock = widget;
-    control_dock_container = dock;
     RegisterPluginHotkeys();
-    blog(LOG_INFO, "[obs-sync-replay] plugin-owned controls ready recording=off replay=off active_encoders=0");
+    blog(LOG_INFO,
+         "[obs-sync-replay] plugin-owned controls ready ui_replaced=%s recording=off replay=off active_encoders=0",
+         capture_controls ? "true" : "false");
 }
 
 } // namespace

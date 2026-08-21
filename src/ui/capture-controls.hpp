@@ -2,40 +2,45 @@
 
 #include "control/capture-control.hpp"
 
-#include <QtWidgets/QWidget>
+#include <QtCore/QObject>
 
 class QLabel;
 class QPushButton;
 class QTimer;
+class QWidget;
 
 namespace obs_sync_replay {
 
 class PluginCaptureRuntime;
 
-class PluginControlDock final : public QWidget {
+class CaptureControls final : public QObject {
   public:
-    explicit PluginControlDock(PluginCaptureRuntime& runtime, QWidget* parent = nullptr);
-    ~PluginControlDock() override;
+    explicit CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent);
+    ~CaptureControls() override;
 
-    PluginControlDock(const PluginControlDock&) = delete;
-    PluginControlDock& operator=(const PluginControlDock&) = delete;
+    CaptureControls(const CaptureControls&) = delete;
+    CaptureControls& operator=(const CaptureControls&) = delete;
 
+    QPushButton* recording_button() const noexcept;
+    QPushButton* replay_button() const noexcept;
+    QPushButton* save_replay_button() const noexcept;
+
+    void RefreshNow();
     void DisableControls();
 
   private:
-    void Refresh();
     void InvokeRecording();
     void InvokeReplayToggle();
     void InvokeReplaySave();
     void Report(const char* action, const ControlCommandResult& result);
+    void ApplyPresentation();
+    void ApplyPresentationSafely();
 
     PluginCaptureRuntime& runtime_;
-    QLabel* recording_state_ = nullptr;
-    QLabel* replay_state_ = nullptr;
-    QLabel* status_ = nullptr;
     QPushButton* recording_button_ = nullptr;
     QPushButton* replay_button_ = nullptr;
-    QPushButton* save_button_ = nullptr;
+    QPushButton* save_replay_button_ = nullptr;
+    QLabel* status_ = nullptr;
     QTimer* refresh_timer_ = nullptr;
     bool disabled_ = false;
     bool recording_failed_ = false;

@@ -100,14 +100,15 @@ ControlCommandResult CaptureControlEngine::StartReplay() {
     if (!initialized_) {
         return Invalid("not-initialized");
     }
-    if (replay_state_ == ReplayConsumerState::Running || replay_state_ == ReplayConsumerState::Saving) {
+    if (replay_state_ == ReplayConsumerState::Starting || replay_state_ == ReplayConsumerState::Running ||
+        replay_state_ == ReplayConsumerState::Saving) {
         return {ControlCommandStatus::NoOp, "replay-already-active"};
     }
     if (replay_state_ != ReplayConsumerState::Off || SelectedCaptureIds(CaptureConsumer::Replay).empty()) {
         return Invalid("replay-state-or-no-streams");
     }
 
-    replay_state_ = ReplayConsumerState::Running;
+    replay_state_ = ReplayConsumerState::Starting;
     replay_result_.reset();
     capture_.SetReplayRetentionEnabled(true);
     if (!EnsureCaptureActive() || !ReconcileEncoderDemand()) {
@@ -116,6 +117,7 @@ ControlCommandResult CaptureControlEngine::StartReplay() {
         StopCaptureIfUnused();
         return {ControlCommandStatus::Failed, "replay-infrastructure-start"};
     }
+    replay_state_ = ReplayConsumerState::Running;
     return {ControlCommandStatus::Succeeded, "replay-started"};
 }
 
@@ -136,6 +138,9 @@ ControlCommandResult CaptureControlEngine::StopReplay() {
 ControlCommandResult CaptureControlEngine::SaveReplay(std::vector<std::filesystem::path> paths) {
     if (replay_state_ == ReplayConsumerState::Off) {
         return Invalid("replay-off");
+    }
+    if (replay_state_ != ReplayConsumerState::Running && replay_state_ != ReplayConsumerState::Saving) {
+        return Invalid("replay-not-running");
     }
     if (replay_state_ == ReplayConsumerState::Saving) {
         return Invalid("replay-save-active");

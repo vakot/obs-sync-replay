@@ -215,7 +215,7 @@ The runtime log must show this ordered evidence before any timeline or encoder r
 is considered:
 
 ```text
-[sync-bootstrap] scheduled for frontend finished-loading after scene-collection activation
+[sync-bootstrap] waiting for frontend finished-loading; no capture will start automatically
 [sync-bootstrap] begin clean_runtime=true ...
 [sync-bootstrap] video-check observed base=1920x1080 output=1920x1080 fps=60/1 ...
 [sync-bootstrap] initial-source-check inputs=0 scenes=1
@@ -225,7 +225,9 @@ is considered:
 [sync-bootstrap] create-scene complete name=Sync Research Scene A ...
 [sync-bootstrap] create-scene complete name=Sync Research Scene B ...
 [sync-bootstrap] complete scene_a=... scene_b=...
-[obs-sync-replay] research bootstrap ready; coordinator started ...
+[plugin-control] initialized idle=true active_encoder_count=0
+[plugin-ui] native controls replaced dock=controlsDock record=recordButton replay=replayBufferButton save=saveReplayButton
+[obs-sync-replay] plugin-owned controls ready ui_replaced=true recording=off replay=off active_encoders=0
 ```
 
 Any bootstrap failure, name collision, nonzero initial input count, additional scene,
@@ -253,17 +255,23 @@ participating stream.
 ### Phase 7 plugin-owned UI validation
 
 The product plugin must load with Recording and Replay inactive and zero active
-plugin-owned video encoders. The supported frontend dock exposes Start/Stop
-Recording, Start/Stop Replay Buffer, and Save Replay; its labels and enabled state
-are derived from `CaptureControlEngine` state. Plugin frontend hotkeys invoke the
-same runtime toggle/save methods as the dock. Stock OBS Recording and Replay Buffer
-buttons and lifecycle events are not used as product state.
+plugin-owned video encoders. The UI adapter locates `controlsDock` and replaces the
+native `recordButton`, `replayBufferButton`, and `saveReplayButton` layout entries
+with plugin-owned controls at the same positions. Labels and enabled state are
+derived only from `CaptureControlEngine` state. Plugin frontend hotkeys invoke the
+same runtime toggle/save methods as the controls. Stock OBS Recording and Replay
+Buffer buttons and lifecycle events are not used as product state.
 
-On shutdown, the dock is disabled before both consumers are stopped, replay saves
-are joined, encoders reach zero, hotkeys are unregistered, and the dock/views are
-released. A manual acceptance run should verify Recording-only, Replay-only,
-overlap/handoff, repeated Save Replay, and graceful close for the deterministic
-Master/Scene A/Scene B `Both` configuration.
+On shutdown, plugin controls are disabled before both consumers are stopped, replay
+saves are joined, encoders reach zero, hotkeys are unregistered, and the native
+widgets are restored before plugin controls are released. A manual acceptance run
+should verify Recording-only, Replay-only, overlap/handoff, repeated Save Replay,
+and graceful close for the deterministic Master/Scene A/Scene B `Both` configuration.
+
+The adapter deliberately uses no pixel or screenshot assertions. It relies on the
+OBS 32.2.1 object names and row-layout structure documented above, copies native
+button sizing/icons/style properties, and inherits the active Qt/OBS palette. A
+future OBS update must re-check those object names and layout entries.
 
 The product runtime also logs creation before activation for every non-disabled stream.
 This is expected: resources are pre-created to keep the OBS encoder group complete,
