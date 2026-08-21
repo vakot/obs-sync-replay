@@ -108,6 +108,14 @@ The result log includes per-stream `peak_tail_bytes_a` and `peak_tail_bytes_b` i
 addition to the final empty-tail counters, so steady-state memory can be checked
 without treating finalization as the steady-state measurement.
 
+Phase 6 adds `synchronized-capture-session-test`, which verifies N-stream common
+watermark/range selection, keyframe-safe compressed-ring eviction, immutable
+snapshot ownership, and fan-out of one encoded packet reference to independent
+consumers. The clean three-stream runtime also runs live Recording and two
+serialized asynchronous Replay saves concurrently from the same native x264 or
+NVENC encoders. Validate every output trio with FFmpeg decode plus equal PTS/DTS/
+keyframe signatures; equal wall-clock durations alone are insufficient.
+
 The focused session test also runs a three-hour synthetic 60 FPS logical timeline and
 asserts that retained tail bytes remain bounded after incremental commits. It covers
 asymmetric callback arrival, strict-prefix safety when one stream is ahead, reordered

@@ -8,6 +8,9 @@ The reproducible entry point is:
 .\scripts\run-obs-research.ps1
 ```
 
+Use `-SkipUpdateCheck` when the clean runtime should pass OBS's
+`--disable-updater` startup option.
+
 `run-obs-research.ps1` refuses to modify a running portable OBS process. It clears
 the runtime's `config` directory and the plugin data directory, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
