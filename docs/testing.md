@@ -253,3 +253,7 @@ consumer handoff keeps an encoder alive, and active count must reach zero only a
 both consumers stop. Runtime output validation remains the Phase 6 requirement:
 selected Recording or Replay trios must preserve one common source-CTS range and
 equal PTS/DTS/keyframe signatures for every participating stream.
+
+The OBS harness also logs creation before activation for every non-disabled stream.
+This is expected: resources are pre-created to keep the OBS encoder group complete,
+while only aggregate-demand streams contribute active output and packet callbacks.

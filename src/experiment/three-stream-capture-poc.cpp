@@ -345,64 +345,27 @@ class PocEncoderController final : public EncoderController {
                          const std::array<video_t *, 3>& scene_videos, std::array<StreamResources, 3>& resources)
         : encoder_id_(encoder_id), group_(group), capture_(capture), scene_videos_(scene_videos), resources_(resources) {}
 
-    bool Acquire(const CaptureStreamId stream_id, const ConfiguredStream& stream) override {
+    bool EnsureCreated(const CaptureStreamId stream_id, const ConfiguredStream& stream) override {
+        if (!Resource(stream.identity).video_encoder && !CreateResource(stream_id, stream)) {
+            return false;
+        }
+        return true;
+    }
+
+    bool Activate(const CaptureStreamId stream_id, const ConfiguredStream& stream) override {
         StreamResources& resource = Resource(stream.identity);
         if (resource.started) {
             return true;
         }
-        if (!resource.video_encoder) {
-            obs_data_t *settings = CreateVideoSettings(encoder_id_);
-            obs_data_t *audio_settings = obs_encoder_defaults(kAudioEncoderId);
-            resource.video_encoder = obs_video_encoder_create(encoder_id_, stream.name.c_str(), settings, nullptr);
-            resource.audio_encoder = obs_audio_encoder_create(kAudioEncoderId, stream.name.c_str(), audio_settings, 0,
-                                                              nullptr);
-            resource.output = obs_output_create(kNullOutputId, stream.name.c_str(), nullptr, nullptr);
-            if (settings) {
-                obs_data_release(settings);
-            }
-            if (audio_settings) {
-                obs_data_release(audio_settings);
-            }
-            if (!resource.video_encoder || !resource.audio_encoder || !resource.output) {
-                ReleaseStream(resource);
-                return false;
-            }
-
-            video_t *video = nullptr;
-            switch (stream.identity) {
-            case StreamIdentity::Master:
-                video = obs_get_video();
-                break;
-            case StreamIdentity::SceneA:
-                video = scene_videos_[1];
-                break;
-            case StreamIdentity::SceneB:
-                video = scene_videos_[2];
-                break;
-            }
-            obs_encoder_set_video(resource.video_encoder, video);
-            obs_encoder_set_audio(resource.audio_encoder, obs_get_audio());
-            obs_output_set_video_encoder(resource.output, resource.video_encoder);
-            obs_output_set_audio_encoder(resource.output, resource.audio_encoder, 0);
-            resource.callback = {&capture_, stream_id, stream.name.c_str()};
-            obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
-            if (group_ && !obs_encoder_set_group(resource.video_encoder, group_)) {
-                ReleaseStream(resource);
-                return false;
-            }
-            blog(LOG_INFO, "[phase7] encoder-create stream=%s family=%s", stream.name.c_str(), encoder_id_);
+        if (!resource.output || resource.capture_id != stream_id) {
+            return false;
         }
-
         resource.started = obs_output_start(resource.output);
         if (!resource.started) {
             LogOutputFailure("start", resource);
             ReleaseStream(resource);
             return false;
         }
-        resource.id = stream.identity == StreamIdentity::Master
-                          ? StreamId::Master
-                          : stream.identity == StreamIdentity::SceneA ? StreamId::SceneA : StreamId::SceneB;
-        resource.capture_id = stream_id;
         return true;
     }
 
@@ -447,6 +410,55 @@ class PocEncoderController final : public EncoderController {
     SynchronizedCaptureSession& capture_;
     std::array<video_t *, 3> scene_videos_;
     std::array<StreamResources, 3>& resources_;
+
+    bool CreateResource(const CaptureStreamId stream_id, const ConfiguredStream& stream) {
+        StreamResources& resource = Resource(stream.identity);
+        obs_data_t *settings = CreateVideoSettings(encoder_id_);
+        obs_data_t *audio_settings = obs_encoder_defaults(kAudioEncoderId);
+        resource.video_encoder = obs_video_encoder_create(encoder_id_, stream.name.c_str(), settings, nullptr);
+        resource.audio_encoder = obs_audio_encoder_create(kAudioEncoderId, stream.name.c_str(), audio_settings, 0,
+                                                          nullptr);
+        resource.output = obs_output_create(kNullOutputId, stream.name.c_str(), nullptr, nullptr);
+        if (settings) {
+            obs_data_release(settings);
+        }
+        if (audio_settings) {
+            obs_data_release(audio_settings);
+        }
+        if (!resource.video_encoder || !resource.audio_encoder || !resource.output) {
+            ReleaseStream(resource);
+            return false;
+        }
+
+        video_t *video = nullptr;
+        switch (stream.identity) {
+        case StreamIdentity::Master:
+            video = obs_get_video();
+            break;
+        case StreamIdentity::SceneA:
+            video = scene_videos_[1];
+            break;
+        case StreamIdentity::SceneB:
+            video = scene_videos_[2];
+            break;
+        }
+        obs_encoder_set_video(resource.video_encoder, video);
+        obs_encoder_set_audio(resource.audio_encoder, obs_get_audio());
+        obs_output_set_video_encoder(resource.output, resource.video_encoder);
+        obs_output_set_audio_encoder(resource.output, resource.audio_encoder, 0);
+        resource.callback = {&capture_, stream_id, stream.name.c_str()};
+        obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
+        if (group_ && !obs_encoder_set_group(resource.video_encoder, group_)) {
+            blog(LOG_WARNING, "[phase7] encoder-group-join-skipped stream=%s reason=group-already-started",
+                 stream.name.c_str());
+        }
+        resource.id = stream.identity == StreamIdentity::Master
+                          ? StreamId::Master
+                          : stream.identity == StreamIdentity::SceneA ? StreamId::SceneA : StreamId::SceneB;
+        resource.capture_id = stream_id;
+        blog(LOG_INFO, "[phase7] encoder-create stream=%s family=%s", stream.name.c_str(), encoder_id_);
+        return true;
+    }
 };
 
 ThreeStreamCapturePoc::ThreeStreamCapturePoc(std::string scene_a_name, std::string scene_b_name)

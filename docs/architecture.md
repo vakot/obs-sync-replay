@@ -464,6 +464,13 @@ only that consumer and reconciles aggregate encoder demand, so a handoff does no
 restart an encoder or reset the shared CTS epoch. If both consumers become idle,
 capture and all demanded encoders stop; the next start creates a new capture epoch.
 
+Before activation, the control engine asks the encoder controller to create every
+non-disabled configured stream. It then activates only streams required by the
+aggregate demand. This two-phase lifecycle is required by OBS encoder groups,
+which cannot accept a new member after the first member has started; inactive
+resources therefore remain available for later consumer handoffs without restarting
+active encoders.
+
 The authoritative encoder rule is:
 
 ```text

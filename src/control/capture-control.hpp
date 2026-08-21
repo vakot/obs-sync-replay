@@ -68,7 +68,8 @@ struct EncoderLifecycleDiagnostic final {
 class EncoderController {
   public:
     virtual ~EncoderController() = default;
-    virtual bool Acquire(CaptureStreamId stream_id, const ConfiguredStream& stream) = 0;
+    virtual bool EnsureCreated(CaptureStreamId stream_id, const ConfiguredStream& stream) = 0;
+    virtual bool Activate(CaptureStreamId stream_id, const ConfiguredStream& stream) = 0;
     virtual void Release(CaptureStreamId stream_id, const ConfiguredStream& stream) noexcept = 0;
     virtual bool IsActive(CaptureStreamId stream_id) const noexcept = 0;
     virtual size_t active_count() const noexcept = 0;

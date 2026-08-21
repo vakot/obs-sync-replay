@@ -59,8 +59,13 @@ std::vector<std::filesystem::path> Paths(const char* const stem, const size_t co
 
 class FakeEncoderController final : public EncoderController {
   public:
-    bool Acquire(const CaptureStreamId stream_id, const ConfiguredStream&) override {
-        return active_.insert(stream_id).second;
+    bool EnsureCreated(const CaptureStreamId stream_id, const ConfiguredStream&) override {
+        created_.insert(stream_id);
+        return true;
+    }
+
+    bool Activate(const CaptureStreamId stream_id, const ConfiguredStream&) override {
+        return created_.find(stream_id) != created_.end() && active_.insert(stream_id).second;
     }
 
     void Release(const CaptureStreamId stream_id, const ConfiguredStream&) noexcept override {
@@ -75,6 +80,7 @@ class FakeEncoderController final : public EncoderController {
         return active_.size();
     }
 
+    std::set<CaptureStreamId> created_;
     std::set<CaptureStreamId> active_;
 };
 

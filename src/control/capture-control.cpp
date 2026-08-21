@@ -261,16 +261,29 @@ bool CaptureControlEngine::ReconcileEncoderDemand() {
     const bool replay_active = IsReplayActive(replay_state_);
     for (const ConfiguredStream& stream : configuration_.streams) {
         const auto capture_id = CaptureIdFor(stream.identity);
-        if (!capture_id) {
+        if (!capture_id || stream.mode == StreamParticipationMode::Disabled) {
             continue;
         }
-        const bool demand = StreamNeedsEncoder(stream.mode, recording_active, replay_active);
-        if (demand && !encoders_.IsActive(*capture_id)) {
-            if (!encoders_.Acquire(*capture_id, stream)) {
+        if (!encoders_.IsActive(*capture_id)) {
+            if (!encoders_.EnsureCreated(*capture_id, stream)) {
+                return false;
+            }
+        }
+    }
+    // OBS encoder groups must be complete before the first member starts. The
+    // create pass above makes a consumer handoff add only newly demanded
+    // encoders; the activation pass never restarts already active members.
+    for (const ConfiguredStream& stream : configuration_.streams) {
+        const auto capture_id = CaptureIdFor(stream.identity);
+        if (!capture_id || !StreamNeedsEncoder(stream.mode, recording_active, replay_active)) {
+            continue;
+        }
+        if (!encoders_.IsActive(*capture_id)) {
+            if (!encoders_.Activate(*capture_id, stream)) {
                 return false;
             }
             Emit(EncoderLifecycleEvent::Activated, *capture_id);
-        } else if (demand) {
+        } else {
             Emit(EncoderLifecycleEvent::Retained, *capture_id);
         }
     }
