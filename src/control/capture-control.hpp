@@ -93,6 +93,7 @@ class CaptureControlEngine final {
     ControlCommandResult StartReplay();
     ControlCommandResult StopReplay();
     ControlCommandResult SaveReplay(std::vector<std::filesystem::path> paths);
+    void PollReplaySave() noexcept;
     void WaitForReplaySave() noexcept;
     void Shutdown() noexcept;
 

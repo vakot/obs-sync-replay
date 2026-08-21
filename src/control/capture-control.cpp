@@ -165,6 +165,15 @@ void CaptureControlEngine::WaitForReplaySave() noexcept {
     }
 }
 
+void CaptureControlEngine::PollReplaySave() noexcept {
+    if (!replay_consumer_ || replay_state_ != ReplayConsumerState::Saving || replay_consumer_->active()) {
+        return;
+    }
+    replay_consumer_->Wait();
+    replay_result_ = replay_consumer_->last_result();
+    replay_state_ = ReplayConsumerState::Running;
+}
+
 void CaptureControlEngine::Shutdown() noexcept {
     if (!initialized_ && capture_state_ == CaptureInfrastructureState::Idle) {
         return;

@@ -11,6 +11,8 @@ option(OBS_SYNC_REPLAY_WARNINGS_AS_ERRORS "Treat plugin compiler warnings as err
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ObsSdk)
 
+set(_obs_qt_deps_dir "${_obs_source_dir}/.deps/obs-deps-qt6-${OBS_DEPS_VERSION}-x64")
+
 add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.cpp)
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -84,12 +86,13 @@ add_library(
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
-  src/experiment/three-stream-capture-poc.cpp
+  src/control/plugin-capture-runtime.cpp
   src/plugin/plugin-main.cpp
   src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
+  src/ui/plugin-control-dock.cpp
 )
 target_link_libraries(
   obs-sync-replay
@@ -101,6 +104,7 @@ target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
 target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_include_directories(obs-sync-replay PRIVATE "${_obs_deps_dir}/include")
+target_include_directories(obs-sync-replay PRIVATE "${_obs_qt_deps_dir}/include")
 target_link_libraries(
   obs-sync-replay
   PRIVATE
@@ -109,6 +113,9 @@ target_link_libraries(
     "${_obs_deps_dir}/lib/avutil.lib"
     "${_obs_deps_dir}/lib/swresample.lib"
     "${_obs_deps_dir}/lib/swscale.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Widgets.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Gui.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Core.lib"
 )
 
 if(MSVC)
