@@ -158,3 +158,182 @@ Unobservable through the stock public API:
   timestamps.
 
 The required zero-frame guarantee is therefore not available from this topology.
+
+## Plugin-only timeline normalization
+
+This section answers the follow-up question: whether a plugin can normalize two
+independently started/stopped stock encoder streams to the exact common OBS timeline
+intersection without changing OBS, adding an encoder/muxer, or using a patched
+association API.
+
+### 1. Interpretation of the prior skew evidence
+
+The prior `first_observed_input_cts_*` value was the CTS of the first captured video
+packet after ordering observations by encoder-local PTS. It was not a direct
+observation of the first `video_data` input accepted by an encoder. A packet-map
+failure means that the two captures differed in packet presence or in the public
+local-PTS-to-CTS map; it is not a source-frame-ID comparison. The x264 one-frame
+skews and NVENC multi-frame skews therefore prove an observed activation/packet
+boundary difference, but do not independently identify the corresponding source
+slots.
+
+The defensible cadence model is: a common root cadence is distributed to both views,
+then each pipeline may begin at a different phase and can exhibit encoder-specific
+priming/reordering. The long-run equal maps show stable observed cadence in these
+runs; they do not prove a global `slot N` identity.
+
+### 2. Exact stock clock domains
+
+The stock root graphics thread initializes `obs->video.video_time` from
+`os_gettime_ns()`, ticks sources, renders all active mixes, and advances the root
+time in `libobs/obs-video.c:1131-1148`. `video_sleep` at `:808-871` advances the
+root timestamp by one or more nominal frame intervals and increments the public
+global `obs_get_total_frames()` counter. `obs_get_video_frame_time()` returns the
+current root timestamp; it is not a historical timestamp for an arbitrary encoder
+input.
+
+`obs_view_add` creates one core video mix and one `video_t` per view in
+`libobs/obs-view.c:143-155`. The media-IO loop in
+`libobs/media-io/video-io.c:126-207` independently delivers cached frames to each
+connected callback. Thus both views inherit root timestamps, but callback delivery
+and encoder acceptance are not one shared public queue.
+
+### 3. Publicly observable events
+
+The probe can directly observe only these useful anchors:
+
+- root timestamp, global root frame count, and global lag counter sampled by public
+  `obs_get_video_frame_time()`, `obs_get_total_frames()`, and
+  `obs_get_lagged_frames()`;
+- successful/failed `obs_output_start()` and the order in which the calls are made;
+- output packet `PTS`, `DTS`, and public `encoder_packet_time` CTS/FER/FERC/PIR via
+  `obs_output_add_packet_callback()`;
+- the wall-clock/API-call sample immediately before start or stop and the final
+  packet callback after asynchronous stop/flush completes.
+
+None of these is an immutable source slot accepted by encoder A or B. In particular,
+the output callback is downstream of encoder buffering and packet reordering.
+
+### 4. Start-anchor derivation
+
+There is no exact public start anchor. Sampling the root time/counter immediately
+before each `obs_output_start()` is only a call-time observation. Sampling the root
+counter in the first packet callback is later still and can occur after encoder
+priming, B-frame reordering, or skipped/repeated media-IO delivery. The public
+`obs_encoder_start()` path registers the encoder connection; it does not return the
+first accepted `video_data` timestamp.
+
+Prepared initialization removes some setup variability. Grouping can wait until
+group members are ready and establish a later shared timestamp in
+`libobs/obs-video.c:843-856`, but it is not an atomic public start operation and the
+public callback still cannot expose the grouped input slot.
+
+### 5. End-anchor derivation
+
+There is no exact public end anchor either. `obs_output_stop()` is asynchronous;
+encoder disconnect and flush can produce packets after the stop call. The last
+packet callback identifies the last packet delivered by the output harness, not the
+last source slot accepted by the encoder. A final packet may also be reordered with
+respect to DTS/PTS, and a missing packet-time association is possible after the
+output timing table has drained.
+
+The new probe records root samples before both stop calls and the final local PTS,
+but labels them as boundary observations rather than final source-slot IDs.
+
+### 6. Cadence mapping
+
+At 60 FPS, local PTS differences of one nominal frame interval are consistent with a
+common cadence. A candidate mapping can subtract each stream's local start PTS and
+compare normalized indices, or quantize packet CTS against a sampled root timestamp.
+Neither operation proves the absolute root slot: local PTS is assigned by each
+encoder, and packet CTS is composition timing carried through the output timing
+association. Equal rebased PTS values therefore remain insufficient evidence for
+`source_slot_A[n] == source_slot_B[n]`.
+
+### 7. Repeated and dropped-frame behavior
+
+The root scheduler can advance by more than one interval when late, while media-IO
+cache delivery can repeat a timestamped frame or report skipped frames. The public
+global lag counter describes root lateness, not which view/encoder consumed which
+logical slot. The stock public API has no per-view slot ledger that a plugin can use
+to distinguish an intentional repeated slot from a missing encoder input.
+
+The probe's `source_pts_gaps` and root lag samples are therefore cadence diagnostics,
+not exact slot evidence. This run observed zero lagged frames during both long runs;
+that does not make the boundary anchors observable. No deliberate missed/repeated
+OBS-frame injection was performed because the repository's existing lag injector is
+unavailable; the probe logs `lag_injector=unavailable` and does not patch OBS for it.
+
+### 8. Encoder reordering
+
+Both tested H.264 paths can buffer and reorder frames. Packet DTS/PTS describe the
+encoded packet timeline, while the public packet-time CTS/FER/FERC/PIR values describe
+output/encoder timing events. A first packet by local PTS can be preceded or followed
+by packets whose decode order differs, and stop can flush delayed packets. This makes
+packet trimming by PTS alone unsafe for a zero-frame source-slot guarantee.
+
+### 9. Common-range algorithm if exact anchors existed
+
+If each pipeline exposed an immutable accepted source slot, the plugin-only
+intersection would be deterministic:
+
+```text
+common_start = max(start_slot_A, start_slot_B)
+common_end   = min(end_slot_A, end_slot_B)
+keep exactly [common_start, common_end] in both streams
+```
+
+Every repeated, dropped, or delayed slot would remain represented by its source slot
+identity; no later frame would be shifted to fill a hole. The current stock topology
+cannot supply `start_slot_*` or `end_slot_*`, so this algorithm cannot be instantiated
+with proof from public observations.
+
+### 10. Packet/container normalization options
+
+Stock packet callbacks can observe packets but cannot turn the stock null/output
+pipeline into a normalized pair of files. Exact filtering would require a custom
+output/mux path, an encoder-side association facility, or post-processing/remuxing.
+Those options introduce GOP/keyframe, DTS/PTS, B-frame, codec extradata, and flush
+boundary requirements; they are outside this stock-only experiment and cannot
+recover an unobserved source slot. Equalizing packet timestamps after the fact would
+be a rebasing operation, not proof of the required zero-frame source alignment.
+
+### 11. x264 runtime evidence
+
+Fresh run log: [`2026-08-21 14-26-11.txt`](../obs-dev/config/obs-studio/logs/2026-08-21%2014-26-11.txt).
+
+Across 100 boundary cycles (34 sequential, 33 prepared, 33 grouped), x264 had 11
+sequential first-packet CTS skews and 11 packet-map failures; prepared had 0/0; and
+grouped had 1/1. Alternating stop order exposed 11 cycles with unequal final local
+PTS. The 180-second grouped run produced 10,764 packets per output, zero observed
+packet-map mismatches, six aggregate source-PTS-gap diagnostics, and zero root lagged
+frames. Start and stop root-counter samples were equal for that long run. These are
+consistent with common steady cadence plus unobservable exact boundaries.
+
+### 12. NVENC runtime evidence
+
+The same 100-cycle run produced 34/34 sequential, 6/6 prepared, and 0/0 grouped
+first-packet-CTS-skew/packet-map-failure counts. Alternating stop order produced
+34/6/0 cycles with unequal final local PTS for sequential/prepared/grouped. The
+180-second grouped run produced 10,787 packets per output, zero observed packet-map
+mismatches, zero source-PTS-gap diagnostics, and zero root lagged frames. The NVENC
+start-call root counters were sometimes separated by several root counts even when
+the final packet maps matched; this directly demonstrates that a sampled public root
+counter is not an encoder-input identity.
+
+### 13. Remaining uncertainty
+
+Directly proven: the stock topology has one root cadence; independent activation can
+produce different observed packet boundaries; and both tested encoders maintained
+equal observed packet maps during these long runs. Inferred: the steady-state
+pipelines likely consume the same cadence phase after activation in these runs.
+Unobservable: the exact first and last source slots accepted by each encoder, every
+slot's identity through repeats/drops, and an exact common intersection suitable for
+zero-frame file normalization.
+
+The local ignored OBS source/SDK used for this runtime contains pre-existing
+association additions, but this probe did not call them. The architecture claims are
+based on the official 32.2.1 source paths linked above; runtime evidence should be
+repeated with an unmodified official binary if clean-binary provenance is required.
+
+Conclusion: C. BOUNDARIES ARE NOT EXACTLY OBSERVABLE.
