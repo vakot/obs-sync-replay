@@ -20,6 +20,8 @@ with the copyable configure, build, portable deployment, and debugging workflow 
   coverage;
 - [`docs/building.md`](docs/building.md): Windows toolchain, build presets, portable
   OBS deployment, runtime validation, and debugging;
+- [`docs/research-runtime.md`](docs/research-runtime.md): clean stock-OBS research
+  runtime and deterministic synthetic scene bootstrap;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
   request, and squash-merge conventions.
 

@@ -33,6 +33,9 @@ target_include_directories(obs-sync-replay-pipeline PUBLIC "${CMAKE_CURRENT_SOUR
 add_library(
   obs-sync-replay
   MODULE
+  src/bootstrap/deterministic-test-environment.cpp
+  src/experiment/packet-range-mkv-poc.cpp
+  src/experiment/stock-encoder-timeline-probe.cpp
   src/plugin/plugin-main.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
@@ -40,11 +43,21 @@ add_library(
 )
 target_link_libraries(
   obs-sync-replay
-  PRIVATE OBS::libobs obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
+  PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
 target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(obs-sync-replay PRIVATE "${_obs_deps_dir}/include")
+target_link_libraries(
+  obs-sync-replay
+  PRIVATE
+    "${_obs_deps_dir}/lib/avcodec.lib"
+    "${_obs_deps_dir}/lib/avformat.lib"
+    "${_obs_deps_dir}/lib/avutil.lib"
+    "${_obs_deps_dir}/lib/swresample.lib"
+    "${_obs_deps_dir}/lib/swscale.lib"
+)
 
 if(MSVC)
   target_compile_options(obs-sync-replay-timeline PRIVATE /W4 /permissive- /Zc:__cplusplus)
