@@ -36,6 +36,10 @@ void WaitForOutputInactive(obs_output_t* output) {
     }
 }
 
+bool ShutdownRequested(const std::atomic<bool>* shutdown_requested) {
+    return shutdown_requested && shutdown_requested->load(std::memory_order_acquire);
+}
+
 void LogOutputFailure(const char* stage, const char* stream_id, obs_output_t* output) {
     blog(LOG_ERROR, "[sync-recording] output-failure stage=%s stream=%s error=%s", stage, stream_id,
          output && obs_output_get_last_error(output) ? obs_output_get_last_error(output) : "none");
@@ -146,7 +150,8 @@ void Release(obs_output_t* output_a, obs_output_t* output_b, obs_encoder_t* enco
 } // namespace
 
 void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t* video_b,
-                              const uint32_t duration_seconds, const uint32_t warmup_milliseconds) {
+                              const uint32_t duration_seconds, const uint32_t warmup_milliseconds,
+                              const std::atomic<bool>* shutdown_requested) {
     if (!encoder_id || !video_a || !video_b || duration_seconds == 0) {
         return;
     }
@@ -239,12 +244,19 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
         }
 
         if (started_a && started_b) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(warmup_milliseconds));
+            blog(LOG_INFO, "[sync-recording] started encoder=%s outputs=A,B duration_seconds=%u", encoder_id,
+                 duration_seconds);
+            const auto warmup_deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(warmup_milliseconds);
+            while (!ShutdownRequested(shutdown_requested) && std::chrono::steady_clock::now() < warmup_deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
             session->PollStart(obs_get_video_frame_time());
             const auto start_time = std::chrono::steady_clock::now();
-            while (session->state() == SynchronizedRecordingState::Starting ||
+            while (!ShutdownRequested(shutdown_requested) &&
+                   (session->state() == SynchronizedRecordingState::Starting ||
                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time).count() <
-                       static_cast<int64_t>(duration_seconds)) {
+                       static_cast<int64_t>(duration_seconds))) {
                 if (session->state() == SynchronizedRecordingState::Starting &&
                     !session->PollStart(obs_get_video_frame_time())) {
                     break;
@@ -266,15 +278,20 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
     if (started_a || started_b) {
         obs_output_stop(output_a);
         obs_output_stop(output_b);
+        blog(LOG_INFO, "[sync-recording] outputs-stop-requested encoder=%s", encoder_id);
         WaitForOutputInactive(output_a);
         WaitForOutputInactive(output_b);
+        blog(LOG_INFO, "[sync-recording] outputs-inactive encoder=%s active_a=%s active_b=%s", encoder_id,
+             output_a && obs_output_active(output_a) ? "true" : "false",
+             output_b && obs_output_active(output_b) ? "true" : "false");
     }
 
     if (output_a) obs_output_remove_packet_callback(output_a, OnRecordingPacket, &context_a);
     if (output_b) obs_output_remove_packet_callback(output_b, OnRecordingPacket, &context_b);
     if (session && session->state() == SynchronizedRecordingState::Draining) {
         session->CompleteDrain();
-    } else if (session && session->state() != SynchronizedRecordingState::Stopped) {
+    } else if (session && session->state() != SynchronizedRecordingState::Stopped &&
+               session->state() != SynchronizedRecordingState::Failed) {
         session->Abort();
     }
     if (session) {
@@ -318,6 +335,7 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
                  sink_a_diagnostics ? sink_a_diagnostics->error().c_str() : "unavailable",
                  sink_b_diagnostics ? sink_b_diagnostics->error().c_str() : "unavailable");
         }
+        blog(LOG_INFO, "[sync-recording] result-logged encoder=%s", encoder_id);
     }
 
     Release(output_a, output_b, encoder_a, encoder_b, audio_encoder_a, audio_encoder_b, group);

@@ -472,8 +472,10 @@ bool StockEncoderTimelineProbe::Start() {
 
 void StockEncoderTimelineProbe::Stop() {
     stop_requested_ = true;
+    blog(LOG_INFO, "[sync-shutdown] probe-stop begin worker_joinable=%s", worker_.joinable() ? "true" : "false");
     if (worker_.joinable()) {
         worker_.join();
+        blog(LOG_INFO, "[sync-shutdown] probe-stop worker-joined");
     }
 
     if (!state_) {
@@ -499,6 +501,7 @@ void StockEncoderTimelineProbe::Stop() {
         obs_source_release(state_->scene_b);
         state_->scene_b = nullptr;
     }
+    blog(LOG_INFO, "[sync-shutdown] probe-stop views-released");
 }
 
 void StockEncoderTimelineProbe::Run() {
@@ -662,9 +665,12 @@ void StockEncoderTimelineProbe::Run() {
             if (audio_encoder_b) obs_encoder_release(audio_encoder_b);
         }
 
-        if (stop_requested_ || config.long_run_seconds == 0) {
+        if (stop_requested_) {
+            break;
+        }
+        if (config.long_run_seconds == 0) {
             RunSynchronizedRecording(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
-                                     config.poc_warmup_ms);
+                                     config.poc_warmup_ms, &stop_requested_);
             continue;
         }
 
@@ -795,8 +801,11 @@ void StockEncoderTimelineProbe::Run() {
         if (audio_encoder_a) obs_encoder_release(audio_encoder_a);
         if (audio_encoder_b) obs_encoder_release(audio_encoder_b);
 
+        if (stop_requested_) {
+            break;
+        }
         RunSynchronizedRecording(encoder_id, state_->video_a, state_->video_b, config.poc_duration_seconds,
-                                 config.poc_warmup_ms);
+                                 config.poc_warmup_ms, &stop_requested_);
     }
 
     blog(LOG_INFO,
