@@ -33,6 +33,7 @@ target_include_directories(obs-sync-replay-pipeline PUBLIC "${CMAKE_CURRENT_SOUR
 add_library(
   obs-sync-replay
   MODULE
+  src/bootstrap/deterministic-test-environment.cpp
   src/plugin/plugin-main.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
@@ -40,7 +41,7 @@ add_library(
 )
 target_link_libraries(
   obs-sync-replay
-  PRIVATE OBS::libobs obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
+  PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
