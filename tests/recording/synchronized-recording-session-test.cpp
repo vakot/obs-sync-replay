@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,7 @@ class FakeSink final : public SynchronizedPacketSink {
     bool open = true;
     bool write = true;
     bool finalize = true;
+    size_t max_writes = 0;
     bool opened = false;
     bool aborted = false;
     uint64_t start_cts = 0;
@@ -58,7 +60,7 @@ class FakeSink final : public SynchronizedPacketSink {
     }
 
     bool Write(const EncodedPacket& packet) override {
-        if (!write) {
+        if (!write || (max_writes != 0 && packets.size() >= max_writes)) {
             return false;
         }
         packets.push_back(packet);
@@ -114,6 +116,19 @@ void TestNoCommonKeyframeAndCommonEnd() {
     Require(end.range && end.range->end_cts == 30, "common end must be selected from one A/B intersection");
 }
 
+void TestCommonPrefixRejectsSharedLogicalGap() {
+    EncodedPacketBuffer a(1024);
+    EncodedPacketBuffer b(1024);
+    for (const uint64_t source_cts : {100ULL, 110ULL, 130ULL}) {
+        Require(a.Push(Packet(source_cts, source_cts == 100)) == EncodedPacketBufferResult::Retained,
+                "A common-prefix packet");
+        Require(b.Push(Packet(source_cts, source_cts == 100)) == EncodedPacketBufferResult::Retained,
+                "B common-prefix packet");
+    }
+    const std::optional<uint64_t> prefix = SelectCommonPrefixEnd(a, b, 100, 130, 10);
+    Require(prefix && *prefix == 110, "shared unresolved CTS gap must block later common packets");
+}
+
 void TestReorderedPtsDtsAndIdenticalRange() {
     EncodedPacketBuffer a(1024);
     EncodedPacketBuffer b(1024);
@@ -127,6 +142,146 @@ void TestReorderedPtsDtsAndIdenticalRange() {
     const std::vector<EncodedPacket> sorted = SortForDecodeOrder(SelectPackets(a, {10, 20}));
     Require(sorted.front().source_cts == 10 && sorted.back().source_cts == 20,
             "decode-order sort must not change source-CTS identity");
+}
+
+SynchronizedRecordingConfig StreamingConfig(const uint64_t reorder_safety_cts = 10) {
+    SynchronizedRecordingConfig config;
+    config.pre_roll_capacity_bytes = 1024;
+    config.tail_capacity_bytes = 128;
+    config.reorder_safety_cts = reorder_safety_cts;
+    config.max_start_wait_cts = 100000;
+    return config;
+}
+
+void StartStreamingSession(SynchronizedRecordingSession& session) {
+    Require(session.Start(100), "streaming session start request");
+    Require(session.SubmitPacket(RecordingStream::A, Packet(100, true)), "streaming A start packet");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(100, true)), "streaming B start packet");
+}
+
+void TestIncrementalCommonPrefixAndAsymmetricArrival() {
+    auto sink_a = std::make_unique<FakeSink>();
+    auto sink_b = std::make_unique<FakeSink>();
+    FakeSink* sink_a_view = sink_a.get();
+    FakeSink* sink_b_view = sink_b.get();
+    SynchronizedRecordingSession session(StreamingConfig(20), StreamConfig(), StreamConfig(), std::move(sink_a),
+                                          std::move(sink_b));
+    StartStreamingSession(session);
+    Require(session.SubmitPacket(RecordingStream::A, Packet(110)), "A must accept ahead packet");
+    Require(session.SubmitPacket(RecordingStream::A, Packet(120)), "A must accept second ahead packet");
+    Require(sink_a_view->packets.empty() && sink_b_view->packets.empty(),
+            "one stream temporarily ahead must not advance the common prefix");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(110)), "B catches up to first packet");
+    Require(sink_a_view->packets.empty() && sink_b_view->packets.empty(),
+            "watermark must retain the safety tail before committing");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(120)), "B catches up to second packet");
+    Require(sink_a_view->packets.size() == 1 && sink_b_view->packets.size() == 1 &&
+                sink_a_view->packets.front().source_cts == 100 && sink_b_view->packets.front().source_cts == 100,
+            "incremental commit must advance only the proven common prefix");
+    Require(session.RequestStop(120), "streaming stop request");
+    Require(session.CompleteDrain(), "streaming drain must finalize");
+    Require(sink_a_view->packets.size() == sink_b_view->packets.size(),
+            "incremental A/B packet counts must remain equal");
+}
+
+void TestUnsafePrefixAndReorderedStop() {
+    auto sink_a = std::make_unique<FakeSink>();
+    auto sink_b = std::make_unique<FakeSink>();
+    FakeSink* sink_a_view = sink_a.get();
+    FakeSink* sink_b_view = sink_b.get();
+    SynchronizedRecordingSession session(StreamingConfig(10), StreamConfig(), StreamConfig(), std::move(sink_a),
+                                          std::move(sink_b));
+    StartStreamingSession(session);
+    Require(session.SubmitPacket(RecordingStream::A, Packet(110, false, 30, 20)), "A packet 110");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(110, false, 30, 20)), "B packet 110");
+    Require(session.SubmitPacket(RecordingStream::A, Packet(120, false, 10, 30)), "A packet 120");
+    Require(session.SubmitPacket(RecordingStream::A, Packet(130, false, 40, 40)), "A packet 130");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(130, false, 40, 40)), "B packet 130");
+    Require(sink_a_view->packets.size() == 2 && sink_b_view->packets.size() == 2,
+            "watermark must not skip B's temporarily missing CTS 120");
+    Require(sink_a_view->packets.back().source_cts == 110 && sink_b_view->packets.back().source_cts == 110,
+            "unsafe source CTS must remain in the unresolved tail");
+    Require(session.SubmitPacket(RecordingStream::B, Packet(120, false, 10, 30)),
+            "late-but-uncommitted reordered packet must be accepted");
+    Require(session.RequestStop(130), "reordered stop request");
+    Require(session.CompleteDrain(), "reordered stop must finalize");
+    Require(session.selected_range() && session.selected_range()->end_cts == 130,
+            "exact commonEndCTS must include the final common source CTS");
+    Require(sink_a_view->packets.size() == sink_b_view->packets.size(),
+            "reordered stop must preserve equal output packet counts");
+}
+
+void TestLongLogicalTimelineHasBoundedTail() {
+    auto sink_a = std::make_unique<FakeSink>();
+    auto sink_b = std::make_unique<FakeSink>();
+    SynchronizedRecordingSession session(StreamingConfig(33'333'334), StreamConfig(), StreamConfig(),
+                                          std::move(sink_a), std::move(sink_b));
+    StartStreamingSession(session);
+    constexpr uint64_t kFrameInterval = 16'666'667;
+    constexpr uint64_t kThreeHours = 3ULL * 60ULL * 60ULL * 60ULL;
+    for (uint64_t frame = 1; frame <= kThreeHours; ++frame) {
+        const uint64_t source_cts = 100 + frame * kFrameInterval;
+        Require(session.SubmitPacket(RecordingStream::B, Packet(source_cts)), "long-run B packet");
+        Require(session.SubmitPacket(RecordingStream::A, Packet(source_cts)), "long-run A packet");
+    }
+    Require(session.RequestStop(100 + kThreeHours * kFrameInterval), "long-run stop request");
+    Require(session.CompleteDrain(), "long-run drain");
+    const SynchronizedRecordingMetrics metrics = session.metrics();
+    Require(metrics.tail_bytes_a == 0 && metrics.tail_bytes_b == 0, "finalized session must release unresolved tails");
+    Require(metrics.peak_tail_bytes_a <= 16 && metrics.peak_tail_bytes_b <= 16,
+            "long-run per-stream tail memory must remain bounded");
+    Require(metrics.peak_retained_bytes <= 32, "long-run compressed tail must remain bounded");
+    Require(session.selected_range() && session.selected_range()->end_cts == 100 + kThreeHours * kFrameInterval,
+            "long-run common end must remain exact");
+}
+
+void TestStreamingWriteFailureAndTransactionalFinalize() {
+    auto sink_a = std::make_unique<FakeSink>();
+    auto sink_b = std::make_unique<FakeSink>();
+    FakeSink* sink_a_view = sink_a.get();
+    FakeSink* sink_b_view = sink_b.get();
+    sink_a_view->max_writes = 1;
+    SynchronizedRecordingSession write_failure(StreamingConfig(), StreamConfig(), StreamConfig(), std::move(sink_a),
+                                                std::move(sink_b));
+    StartStreamingSession(write_failure);
+    Require(write_failure.SubmitPacket(RecordingStream::A, Packet(110)), "partial write A packet");
+    Require(write_failure.SubmitPacket(RecordingStream::B, Packet(110)), "partial write B packet");
+    Require(write_failure.SubmitPacket(RecordingStream::A, Packet(120)), "partial write A second packet");
+    Require(!write_failure.SubmitPacket(RecordingStream::B, Packet(120)),
+            "writer failure after partial streaming must fail the transaction");
+    Require(write_failure.state() == SynchronizedRecordingState::Failed && sink_a_view->aborted &&
+                sink_b_view->aborted,
+            "partial streaming failure must abort both outputs");
+
+    auto finalize_a = std::make_unique<FakeSink>();
+    auto finalize_b = std::make_unique<FakeSink>();
+    FakeSink* finalize_a_view = finalize_a.get();
+    FakeSink* finalize_b_view = finalize_b.get();
+    finalize_b_view->finalize = false;
+    SynchronizedRecordingSession finalize_failure(StreamingConfig(), StreamConfig(), StreamConfig(),
+                                                  std::move(finalize_a), std::move(finalize_b));
+    StartStreamingSession(finalize_failure);
+    Require(finalize_failure.SubmitPacket(RecordingStream::A, Packet(110)), "finalize A packet");
+    Require(finalize_failure.SubmitPacket(RecordingStream::B, Packet(110)), "finalize B packet");
+    Require(finalize_failure.RequestStop(110), "finalize failure stop request");
+    Require(!finalize_failure.CompleteDrain(), "finalization failure must be reported");
+    Require(finalize_failure.state() == SynchronizedRecordingState::Failed && finalize_a_view->aborted &&
+                finalize_b_view->aborted,
+            "finalization failure must abort both outputs transactionally");
+}
+
+void TestUnresolvedTailOverflowFailsExplicitly() {
+    SynchronizedRecordingConfig config = StreamingConfig(1'000'000);
+    config.tail_capacity_bytes = 3;
+    auto sink_a = std::make_unique<FakeSink>();
+    auto sink_b = std::make_unique<FakeSink>();
+    SynchronizedRecordingSession session(config, StreamConfig(), StreamConfig(), std::move(sink_a), std::move(sink_b));
+    StartStreamingSession(session);
+    Require(!session.SubmitPacket(RecordingStream::A, Packet(110)),
+            "unresolved tail overflow must reject the packet");
+    Require(session.state() == SynchronizedRecordingState::Failed &&
+                session.failure() == SynchronizedRecordingFailure::BufferCapacity,
+            "tail overflow must fail explicitly rather than evicting history");
 }
 
 void TestTransactionalStartStopAndFailureRollback() {
@@ -170,7 +325,13 @@ int main() {
     TestPacketOwnershipAndBoundedCapacity();
     TestCommonStartAndAsymmetricStartup();
     TestNoCommonKeyframeAndCommonEnd();
+    TestCommonPrefixRejectsSharedLogicalGap();
     TestReorderedPtsDtsAndIdenticalRange();
+    TestIncrementalCommonPrefixAndAsymmetricArrival();
+    TestUnsafePrefixAndReorderedStop();
+    TestLongLogicalTimelineHasBoundedTail();
+    TestStreamingWriteFailureAndTransactionalFinalize();
+    TestUnresolvedTailOverflowFailsExplicitly();
     TestTransactionalStartStopAndFailureRollback();
     TestStopDrainStateTransitions();
     return EXIT_SUCCESS;
