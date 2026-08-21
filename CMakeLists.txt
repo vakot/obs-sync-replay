@@ -21,6 +21,29 @@ target_compile_features(obs-sync-replay-rendering-coordination PUBLIC cxx_std_17
 target_include_directories(obs-sync-replay-rendering-coordination PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 add_library(
+  obs-sync-replay-recording
+  STATIC
+  src/recording/encoded-packet-buffer.cpp
+  src/recording/synchronized-recording-session.cpp
+  src/sync/common-packet-range.cpp
+)
+target_compile_features(obs-sync-replay-recording PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-recording PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_library(obs-sync-replay-muxing STATIC src/muxing/mkv-packet-writer.cpp)
+target_link_libraries(obs-sync-replay-muxing PUBLIC obs-sync-replay-recording)
+target_compile_features(obs-sync-replay-muxing PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-muxing PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(obs-sync-replay-muxing PRIVATE "${_obs_deps_dir}/include")
+target_link_libraries(
+  obs-sync-replay-muxing
+  PUBLIC
+    "${_obs_deps_dir}/lib/avcodec.lib"
+    "${_obs_deps_dir}/lib/avformat.lib"
+    "${_obs_deps_dir}/lib/avutil.lib"
+)
+
+add_library(
   obs-sync-replay-pipeline
   STATIC
   src/pipeline/synchronized-frame-queue.cpp
