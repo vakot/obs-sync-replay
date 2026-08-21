@@ -157,3 +157,33 @@ artifact. Runtime acceptance additionally requires deploying to the configured
 portable OBS instance, observing the `[obs-sync-replay] plugin loaded` log entry, and
 closing OBS normally with the matching unload entry. These checks establish module
 integration only and are not synchronization evidence.
+
+## Clean Runtime Bootstrap Validation
+
+The stock-OBS research experiment must be launched with
+`scripts/run-obs-research.ps1` after deployment. The launcher resets the configured
+portable runtime and generates only the documented `Sync Replay Research` profile
+video keys; it must not be replaced with manual UI setup or a prior Phase 1–7 runtime.
+
+The runtime log must show this ordered evidence before any timeline or encoder result
+is considered:
+
+```text
+[sync-bootstrap] scheduled for frontend finished-loading after scene-collection activation
+[sync-bootstrap] begin clean_runtime=true ...
+[sync-bootstrap] video-check observed base=1920x1080 output=1920x1080 fps=60/1 ...
+[sync-bootstrap] initial-source-check inputs=0 scenes=1
+[sync-bootstrap] stock-placeholder-check name=... items=0
+[sync-bootstrap] stock-placeholder remove complete name=...
+[sync-bootstrap] clean-source-check inputs=0 scenes=0
+[sync-bootstrap] create-scene complete name=Sync Research Scene A ...
+[sync-bootstrap] create-scene complete name=Sync Research Scene B ...
+[sync-bootstrap] complete scene_a=... scene_b=...
+[obs-sync-replay] research bootstrap ready; coordinator started ...
+```
+
+Any bootstrap failure, name collision, nonzero initial input count, additional scene,
+non-empty stock placeholder, video mismatch, or missing completion line invalidates
+the run. The synthetic `color_source` inputs
+are the only experiment content and require no camera, display capture, external file,
+recording output, replay-buffer configuration, or existing scene/source name.

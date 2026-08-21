@@ -200,8 +200,9 @@ attempts. OBS 32.2.1's own `ScreenshotObj` uses this same supported context-ente
 pattern from a tick callback. This is deliberately not a queued "latest frame"
 handoff: the two attempts occur in the callback that owns the supplied frame.
 
-Each `SceneRenderer` resolves its development scene name (`Gameplay Test` or `Camera
-Test`) with `obs_get_source_by_name` for the individual attempt. That API returns a
+Each `SceneRenderer` resolves the bootstrap-owned scene name (`Sync Research Scene A`
+or `Sync Research Scene B`) with `obs_get_source_by_name` for the individual attempt.
+That API returns a
 strong source reference, released immediately after rendering. The renderer verifies
 that the source is an `obs_scene_t`, obtains its native `obs_source_get_width` and
 `obs_source_get_height`, and renders it with `obs_source_video_render` into its own
@@ -267,6 +268,31 @@ no half-pair. This phase does not substitute a frame or let a later frame occupy
 failed slot. `sync-pipeline` diagnostics report `master_frame_id`, `master_pts`,
 status, queue size, and capacity; retained frames are debug-level except for sampled
 observations, while invalid pairs and pressure are explicit errors/warnings.
+
+## Clean Stock-OBS Research Bootstrap
+
+The research branch does not depend on a previous scene collection, profile, source,
+camera, display capture, recording output, replay-buffer setting, or plugin state. The
+launcher resets the disposable portable runtime and creates only the profile video
+keys required before OBS can initialize its root video mix. Stock OBS 32.2.1 loads
+that profile and activates an empty scene collection before the plugin's finished-
+loading frontend callback.
+
+`obs_reset_video` is intentionally not called by the plugin: OBS has already made the
+root video active before third-party module callbacks run, and the public API rejects a
+reset while video is active. The plugin therefore verifies the observed configuration
+and fails closed if it is not base/output 1920x1080 at 60/1. On the finished-loading
+frontend callback, `DeterministicTestEnvironment` removes stock OBS's sole empty
+placeholder scene and verifies zero remaining input and scene sources, creates both
+scenes with `obs_scene_create`, resolves the latest stock
+`color_source` type with `obs_get_latest_input_type_id`, creates fixed 1920x1080 color
+sources with `obs_source_create`, and attaches them with `obs_scene_add`. All actions
+and failures are emitted under `[sync-bootstrap]`.
+
+The coordinator is started only after the bootstrap succeeds. This preserves the
+existing invariant that both scene renders consume the same coordinator-issued
+`MasterFrame`; bootstrap failure cannot silently fall back to independently named or
+previously configured scenes.
 
 ## Replay Save Contract
 
