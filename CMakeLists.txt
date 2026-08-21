@@ -136,6 +136,14 @@ if(MSVC)
 endif()
 add_test(NAME synchronized-frame-queue COMMAND synchronized-frame-queue-test)
 
+add_executable(synchronized-recording-session-test tests/recording/synchronized-recording-session-test.cpp)
+target_link_libraries(synchronized-recording-session-test PRIVATE obs-sync-replay-recording)
+target_compile_features(synchronized-recording-session-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-recording-session-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-recording-session COMMAND synchronized-recording-session-test)
+
 add_test(
   NAME plugin-artifact
   COMMAND
