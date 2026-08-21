@@ -493,3 +493,12 @@ action, Recording and Replay are Off and the plugin-owned active encoder count i
 zero. Shutdown disables plugin controls, restores the retained stock widgets,
 unregisters plugin hotkeys, stops both consumers, waits for active replay saves,
 drains capture, and releases the plugin-owned scene views and encoder group.
+
+The plugin-owned lifecycle does not emit OBS standard Recording or Replay frontend
+events. OBS 32.2.1 exposes public event subscription and stock state/query APIs, but
+does not expose a public event-emission function; the stock events are dispatched by
+internal `OBSBasic` handlers around stock output lifecycles. The compatibility
+boundary and third-party implications are documented in
+[`frontend-event-compatibility.md`](frontend-event-compatibility.md). Do not use
+private frontend symbols or claim stock state-query/output-path compatibility for
+plugin-owned files.

@@ -26,6 +26,8 @@ with the copyable configure, build, portable deployment, and debugging workflow 
   ownership, and active-epoch lifecycle;
 - [`docs/replay-configuration.md`](docs/replay-configuration.md): OBS Replay Buffer
   profile keys, availability policy, refresh lifecycle, and shared memory bound;
+- [`docs/frontend-event-compatibility.md`](docs/frontend-event-compatibility.md):
+  OBS frontend event, state-query, script, and output/path compatibility audit;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
   request, and squash-merge conventions.
 
