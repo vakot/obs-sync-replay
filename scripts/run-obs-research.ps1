@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$ObsDevRoot,
-  [switch]$Wait
+  [switch]$Wait,
+  [switch]$SkipUpdateCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,7 +15,12 @@ $obsExecutable = Join-Path $portableRoot 'bin\64bit\obs64.exe'
 $workingDirectory = Split-Path -Parent $obsExecutable
 $profileName = 'Sync Replay Research'
 
-$process = Start-Process -FilePath $obsExecutable -ArgumentList @('--portable', '--multi', '--profile', $profileName) `
+$arguments = @('--portable', '--multi', '--profile', $profileName)
+if ($SkipUpdateCheck) {
+  $arguments += '--disable-updater'
+}
+
+$process = Start-Process -FilePath $obsExecutable -ArgumentList $arguments `
   -WorkingDirectory $workingDirectory -PassThru
 Write-Host "Started clean stock OBS research runtime PID $($process.Id): $obsExecutable"
 Write-Host "Expected runtime profile: $profileName"

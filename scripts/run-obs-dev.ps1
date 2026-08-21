@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$ObsDevRoot,
-  [switch]$Wait
+  [switch]$Wait,
+  [switch]$SkipUpdateCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,7 +13,12 @@ $portableRoot = Resolve-ObsDevRoot -ConfiguredRoot $ObsDevRoot
 $obsExecutable = Join-Path $portableRoot 'bin\64bit\obs64.exe'
 $workingDirectory = Split-Path -Parent $obsExecutable
 
-$process = Start-Process -FilePath $obsExecutable -ArgumentList @('--portable', '--multi') -WorkingDirectory $workingDirectory -PassThru
+$arguments = @('--portable', '--multi')
+if ($SkipUpdateCheck) {
+  $arguments += '--disable-updater'
+}
+
+$process = Start-Process -FilePath $obsExecutable -ArgumentList $arguments -WorkingDirectory $workingDirectory -PassThru
 Write-Host "Started portable OBS PID $($process.Id): $obsExecutable"
 
 if ($Wait) {

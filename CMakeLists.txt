@@ -43,6 +43,22 @@ target_link_libraries(
     "${_obs_deps_dir}/lib/avutil.lib"
 )
 
+add_library(obs-sync-replay-capture STATIC src/capture/synchronized-capture-session.cpp)
+target_link_libraries(obs-sync-replay-capture PUBLIC obs-sync-replay-recording)
+target_compile_features(obs-sync-replay-capture PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-capture PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_library(
+  obs-sync-replay-replay
+  STATIC
+  src/recording/synchronized-recording-consumer.cpp
+  src/replay/synchronized-replay-consumer.cpp
+)
+target_link_libraries(obs-sync-replay-replay PUBLIC obs-sync-replay-capture obs-sync-replay-muxing)
+target_compile_features(obs-sync-replay-replay PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-replay PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(obs-sync-replay-replay PRIVATE "${_obs_deps_dir}/include")
+
 add_library(
   obs-sync-replay-pipeline
   STATIC
@@ -58,6 +74,7 @@ add_library(
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
+  src/experiment/three-stream-capture-poc.cpp
   src/plugin/plugin-main.cpp
   src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
@@ -67,7 +84,7 @@ add_library(
 target_link_libraries(
   obs-sync-replay
   PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
-          obs-sync-replay-recording obs-sync-replay-muxing
+          obs-sync-replay-recording obs-sync-replay-muxing obs-sync-replay-capture obs-sync-replay-replay
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
@@ -143,6 +160,23 @@ if(MSVC)
   target_compile_options(synchronized-recording-session-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME synchronized-recording-session COMMAND synchronized-recording-session-test)
+
+add_executable(synchronized-capture-session-test tests/capture/synchronized-capture-session-test.cpp)
+target_link_libraries(synchronized-capture-session-test PRIVATE obs-sync-replay-capture)
+target_compile_features(synchronized-capture-session-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-capture-session-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-capture-session COMMAND synchronized-capture-session-test)
+
+add_executable(synchronized-replay-consumer-test tests/replay/synchronized-replay-consumer-test.cpp)
+target_link_libraries(synchronized-replay-consumer-test PRIVATE obs-sync-replay-replay)
+target_compile_features(synchronized-replay-consumer-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(synchronized-replay-consumer-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME synchronized-replay-consumer COMMAND synchronized-replay-consumer-test)
+set_tests_properties(synchronized-replay-consumer PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
 
 add_test(
   NAME plugin-artifact
