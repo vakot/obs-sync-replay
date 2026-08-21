@@ -446,3 +446,39 @@ Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and
 `data/obs-plugins/obs-sync-replay` for module data. Development deployment is limited
 to an explicitly configured portable OBS root with a portable-mode marker.
+
+## Phase 7 Control and Configuration Layer
+
+Phase 7 adds an in-memory `CaptureConfiguration` over the Phase 6 shared capture
+session. The deterministic streams remain Master, Scene A, and Scene B, and each has
+one explicit participation mode: `Disabled`, `Recording`, `Replay`, or `Both`.
+Recording and Replay select their own configured stream subsets; a `Both` stream is
+still represented by one native OBS video encoder whose immutable packet is fanned
+out to both consumers.
+
+`CaptureControlEngine` owns independent infrastructure, Recording, and Replay
+states and exposes `StartRecording`, `StopRecording`, `StartReplay`, `StopReplay`,
+and `SaveReplay` commands. Repeated starts are explicit no-ops; Save Replay while
+Replay is off is an explicit invalid-state result. Stopping one consumer unsubscribes
+only that consumer and reconciles aggregate encoder demand, so a handoff does not
+restart an encoder or reset the shared CTS epoch. If both consumers become idle,
+capture and all demanded encoders stop; the next start creates a new capture epoch.
+
+The authoritative encoder rule is:
+
+```text
+stream needs encoder = recording consumer active and mode permits Recording
+                     or replay consumer active and mode permits Replay
+```
+
+Replay retention is enabled only while Replay is active. Recording-only capture still
+fans packets to its live consumer but does not retain a replay ring. Mixed-mode
+Replay saves use one common range selected across only the streams configured for
+Replay, while Recording receives only streams configured for Recording. Lifecycle
+diagnostics report encoder activation, retention by another consumer, and release
+with the active encoder count.
+
+The OBS development harness exercises deterministic sequences A--D through this
+control API and accepts `OBS_SYNC_REPLAY_THREE_STREAM_SEQUENCE` plus the comma-separated
+`OBS_SYNC_REPLAY_THREE_STREAM_MODES` environment setting. This remains a harness
+configuration boundary; persistent settings, UI, hotkeys, and audio are deferred.

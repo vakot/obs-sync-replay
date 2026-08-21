@@ -233,3 +233,23 @@ non-empty stock placeholder, video mismatch, or missing completion line invalida
 the run. The synthetic `color_source` inputs
 are the only experiment content and require no camera, display capture, external file,
 recording output, replay-buffer configuration, or existing scene/source name.
+
+### Phase 7 control validation
+
+`capture-control-test` covers the explicit stream modes, aggregate encoder demand,
+idempotent and invalid commands, Recording/Replay handoff in both directions,
+mixed Master/Scene A/Scene B modes, disabled streams, total-idle release, and fresh
+capture-epoch creation. The test also verifies that Recording-only capture does not
+retain replay packets.
+
+The runtime harness uses the same control API. Set
+`OBS_SYNC_REPLAY_THREE_STREAM_SEQUENCE` to `A`, `B`, `C`, or `D` for the deterministic
+sequences in the Phase 7 brief, and set
+`OBS_SYNC_REPLAY_THREE_STREAM_MODES` to three comma-separated values such as
+`both,recording,replay` for mixed-mode validation. For the default `both,both,both`
+configuration, logs must show three active video encoders during Recording-only,
+Replay-only, and concurrent operation; `encoder-retain` events must appear when a
+consumer handoff keeps an encoder alive, and active count must reach zero only after
+both consumers stop. Runtime output validation remains the Phase 6 requirement:
+selected Recording or Replay trios must preserve one common source-CTS range and
+equal PTS/DTS/keyframe signatures for every participating stream.

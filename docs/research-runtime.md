@@ -17,6 +17,12 @@ zero; this test-only hook delays a replay worker after it snapshots packets so a
 normal WM_CLOSE can be exercised while the save is active. It does not slow normal
 muxing.
 
+Phase 7 control sequences are selected with `OBS_SYNC_REPLAY_THREE_STREAM_SEQUENCE`
+(`A`, `B`, `C`, or `D`; default `C`). Per-stream participation is selected with
+`OBS_SYNC_REPLAY_THREE_STREAM_MODES`, for example `both,recording,replay`. The
+harness logs command results and aggregate active encoder counts; it does not add
+UI, hotkeys, or persistent profile settings.
+
 `run-obs-research.ps1` refuses to modify a running portable OBS process. It clears
 the runtime's `config` directory and the plugin data directory, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
