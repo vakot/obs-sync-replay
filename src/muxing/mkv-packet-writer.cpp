@@ -12,6 +12,7 @@ extern "C" {
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <sstream>
 
 namespace obs_sync_replay {
@@ -117,13 +118,17 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
     output_packet->pts = av_rescale_q(packet.pts - timestamp_origin_, source_timebase, target_timebase);
     output_packet->dts = av_rescale_q(packet.dts - timestamp_origin_, source_timebase, target_timebase);
     if (has_last_written_dts_ && output_packet->dts < last_written_dts_) {
+        std::ostringstream reason;
+        reason << "packet-dts-order-invalid:source_cts=" << packet.source_cts << ":dts=" << packet.dts
+               << ":muxed_dts=" << output_packet->dts << ":last_muxed_dts=" << last_written_dts_;
         av_packet_free(&output_packet);
-        return Fail("packet-dts-order-invalid");
+        return Fail(reason.str().c_str());
     }
     output_packet->stream_index = stream_->index;
     if (packet.keyframe) {
         output_packet->flags |= AV_PKT_FLAG_KEY;
     }
+    const int64_t muxed_dts = output_packet->dts;
     const int error = av_interleaved_write_frame(format_, output_packet);
     av_packet_free(&output_packet);
     if (error < 0) {
@@ -141,7 +146,7 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
         first_source_cts_ = std::min(first_source_cts_, packet.source_cts);
     }
     last_source_cts_ = std::max(last_source_cts_, packet.source_cts);
-    last_written_dts_ = packet.dts;
+    last_written_dts_ = muxed_dts;
     has_last_written_dts_ = true;
     ++packet_count_;
     bytes_ += packet.payload.size();
@@ -212,30 +217,64 @@ bool MkvPacketSink::Open(const PacketStreamConfig& config, const uint64_t common
     error_.clear();
     pending_.clear();
     pending_bytes_ = 0;
+    pending_capacity_bytes_ = config.muxer_tail_capacity_bytes;
+    muxer_reorder_safety_cts_ = config.muxer_reorder_safety_cts;
     common_start_cts_ = common_start_cts;
-    return writer_.Open(path_, config);
+    packet_timebase_num_ = 0;
+    packet_timebase_den_ = 0;
+    has_max_observed_dts_ = false;
+    max_observed_dts_ = 0;
+    return pending_capacity_bytes_ > 0 && writer_.Open(path_, config);
 }
 
 bool MkvPacketSink::Write(const EncodedPacket& packet) {
-    constexpr size_t kPendingCapacityBytes = 4 * 1024 * 1024;
-    if (packet.payload.empty() || packet.payload.size() > kPendingCapacityBytes -
-                                      (pending_bytes_ <= kPendingCapacityBytes ? pending_bytes_ : kPendingCapacityBytes)) {
+    if (packet.payload.empty() || packet.payload.size() > pending_capacity_bytes_ -
+                                      (pending_bytes_ <= pending_capacity_bytes_ ? pending_bytes_ : pending_capacity_bytes_)) {
         return Fail("mkv-reorder-buffer-capacity");
+    }
+    if (packet_timebase_num_ == 0) {
+        packet_timebase_num_ = packet.timebase_num;
+        packet_timebase_den_ = packet.timebase_den;
+    } else if (packet.timebase_num != packet_timebase_num_ || packet.timebase_den != packet_timebase_den_) {
+        return Fail("mkv-reorder-buffer-timebase-mismatch");
+    }
+    if (!has_max_observed_dts_ || packet.dts > max_observed_dts_) {
+        max_observed_dts_ = packet.dts;
+        has_max_observed_dts_ = true;
     }
     pending_bytes_ += packet.payload.size();
     pending_.push_back(packet);
     return true;
 }
 
-bool MkvPacketSink::CommitThrough(const uint64_t source_cts) {
-    return FlushPendingThrough(source_cts);
+bool MkvPacketSink::CommitThrough(const uint64_t) {
+    if (!has_max_observed_dts_ || packet_timebase_num_ <= 0 || packet_timebase_den_ <= 0) {
+        return true;
+    }
+    const int64_t safety_ticks = av_rescale_q(
+        static_cast<int64_t>(std::min<uint64_t>(muxer_reorder_safety_cts_,
+                                                static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))),
+        AVRational{1, 1'000'000'000}, AVRational{packet_timebase_num_, packet_timebase_den_});
+    if (max_observed_dts_ <= std::numeric_limits<int64_t>::min() + safety_ticks) {
+        return true;
+    }
+    // Source CTS selects the shared common prefix. DTS selects the safe packet
+    // prefix within that range because callback order is not decode order.
+    return FlushPendingThroughDts(max_observed_dts_ - safety_ticks);
 }
 
 bool MkvPacketSink::Finalize(const uint64_t common_end_cts) {
-    if (!FlushPendingThrough(UINT64_MAX)) {
+    const auto finalization_start = std::chrono::steady_clock::now();
+    if (!FlushPendingThroughDts(std::nullopt)) {
+        result_.finalization_time_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - finalization_start)
+                .count());
         return false;
     }
     result_ = writer_.Finalize();
+    result_.finalization_time_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - finalization_start)
+            .count());
     return result_.success && result_.first_source_cts == common_start_cts_ &&
            result_.last_source_cts == common_end_cts;
 }
@@ -243,6 +282,12 @@ bool MkvPacketSink::Finalize(const uint64_t common_end_cts) {
 void MkvPacketSink::Abort() noexcept {
     pending_.clear();
     pending_bytes_ = 0;
+    pending_capacity_bytes_ = 0;
+    muxer_reorder_safety_cts_ = 0;
+    packet_timebase_num_ = 0;
+    packet_timebase_den_ = 0;
+    has_max_observed_dts_ = false;
+    max_observed_dts_ = 0;
     writer_.Abort();
 }
 
@@ -254,13 +299,13 @@ const std::string& MkvPacketSink::error() const noexcept {
     return error_.empty() ? writer_.error() : error_;
 }
 
-bool MkvPacketSink::FlushPendingThrough(const uint64_t source_cts) {
+bool MkvPacketSink::FlushPendingThroughDts(const std::optional<int64_t> dts_watermark) {
     std::vector<EncodedPacket> selected;
     std::vector<EncodedPacket> remaining;
     selected.reserve(pending_.size());
     remaining.reserve(pending_.size());
     for (EncodedPacket packet : std::move(pending_)) {
-        if (packet.source_cts <= source_cts) {
+        if (!dts_watermark || packet.dts <= *dts_watermark) {
             selected.push_back(std::move(packet));
         } else {
             remaining.push_back(std::move(packet));

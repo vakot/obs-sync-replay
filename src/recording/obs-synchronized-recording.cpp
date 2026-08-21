@@ -210,10 +210,19 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
         sink_b_diagnostics = sink_b.get();
         SynchronizedRecordingConfig config;
         config.pre_roll_capacity_bytes = 2 * 1024 * 1024;
-        config.tail_capacity_bytes = 4 * 1024 * 1024;
+        config.tail_capacity_bytes = 8 * 1024 * 1024;
+        config.reorder_safety_cts = 5'000'000'000;
+        const uint64_t observed_frame_interval_ns = obs_get_frame_interval_ns();
+        config.expected_source_cts_step = observed_frame_interval_ns != 0 ? observed_frame_interval_ns : 16'666'667;
         config.max_start_wait_cts = 2'000'000'000;
-        session = std::make_unique<SynchronizedRecordingSession>(config, StreamConfig(encoder_a),
-                                                                  StreamConfig(encoder_b), std::move(sink_a),
+        PacketStreamConfig stream_config_a = StreamConfig(encoder_a);
+        PacketStreamConfig stream_config_b = StreamConfig(encoder_b);
+        stream_config_a.muxer_tail_capacity_bytes = config.tail_capacity_bytes;
+        stream_config_b.muxer_tail_capacity_bytes = config.tail_capacity_bytes;
+        stream_config_a.muxer_reorder_safety_cts = config.reorder_safety_cts;
+        stream_config_b.muxer_reorder_safety_cts = config.reorder_safety_cts;
+        session = std::make_unique<SynchronizedRecordingSession>(config, std::move(stream_config_a),
+                                                                  std::move(stream_config_b), std::move(sink_a),
                                                                   std::move(sink_b));
         const uint64_t requested_start_cts = obs_get_video_frame_time();
         session->Start(requested_start_cts);
@@ -270,10 +279,16 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
     }
     if (session) {
         const SynchronizedRecordingMetrics metrics = session->metrics();
+        const MkvWriteResult& write_a = sink_a_diagnostics->result();
+        const MkvWriteResult& write_b = sink_b_diagnostics->result();
         blog(session->state() == SynchronizedRecordingState::Stopped ? LOG_INFO : LOG_ERROR,
              "[sync-recording] result encoder=%s state=%s failure=%s common_start_cts=%llu common_end_cts=%llu "
              "pre_roll_packets_a=%llu pre_roll_packets_b=%llu pre_roll_bytes_a=%llu pre_roll_bytes_b=%llu "
-             "tail_packets_a=%llu tail_packets_b=%llu tail_bytes_a=%llu tail_bytes_b=%llu peak_retained_bytes=%llu",
+             "tail_packets_a=%llu tail_packets_b=%llu tail_bytes_a=%llu tail_bytes_b=%llu peak_retained_bytes=%llu "
+             "peak_tail_bytes_a=%llu peak_tail_bytes_b=%llu committed_watermark_cts=%llu "
+             "muxed_packets_a=%llu muxed_packets_b=%llu muxed_bytes_a=%llu muxed_bytes_b=%llu "
+             "muxed_first_cts_a=%llu muxed_first_cts_b=%llu muxed_last_cts_a=%llu muxed_last_cts_b=%llu "
+             "finalize_ms_a=%llu finalize_ms_b=%llu",
              encoder_id, SynchronizedRecordingStateName(session->state()),
              SynchronizedRecordingFailureName(session->failure()),
              static_cast<unsigned long long>(metrics.common_start_cts),
@@ -285,7 +300,19 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
              static_cast<unsigned long long>(metrics.tail_packet_count_a),
              static_cast<unsigned long long>(metrics.tail_packet_count_b),
              static_cast<unsigned long long>(metrics.tail_bytes_a), static_cast<unsigned long long>(metrics.tail_bytes_b),
-             static_cast<unsigned long long>(metrics.peak_retained_bytes));
+             static_cast<unsigned long long>(metrics.peak_retained_bytes),
+             static_cast<unsigned long long>(metrics.peak_tail_bytes_a),
+             static_cast<unsigned long long>(metrics.peak_tail_bytes_b),
+             static_cast<unsigned long long>(metrics.committed_watermark_cts),
+             static_cast<unsigned long long>(write_a.packet_count),
+             static_cast<unsigned long long>(write_b.packet_count),
+             static_cast<unsigned long long>(write_a.bytes), static_cast<unsigned long long>(write_b.bytes),
+             static_cast<unsigned long long>(write_a.first_source_cts),
+             static_cast<unsigned long long>(write_b.first_source_cts),
+             static_cast<unsigned long long>(write_a.last_source_cts),
+             static_cast<unsigned long long>(write_b.last_source_cts),
+             static_cast<unsigned long long>(write_a.finalization_time_ms),
+             static_cast<unsigned long long>(write_b.finalization_time_ms));
         if (session->state() != SynchronizedRecordingState::Stopped) {
             blog(LOG_ERROR, "[sync-recording] mux-diagnostics encoder=%s sink_a=%s sink_b=%s", encoder_id,
                  sink_a_diagnostics ? sink_a_diagnostics->error().c_str() : "unavailable",

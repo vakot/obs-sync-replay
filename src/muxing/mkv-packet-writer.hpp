@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@ struct MkvWriteResult final {
     uint64_t packet_count = 0;
     uint64_t bytes = 0;
     uint64_t wall_time_ms = 0;
+    uint64_t finalization_time_ms = 0;
     std::string error;
 };
 
@@ -80,7 +82,7 @@ class MkvPacketSink final : public SynchronizedPacketSink {
     const std::string& error() const noexcept;
 
   private:
-    bool FlushPendingThrough(uint64_t source_cts);
+    bool FlushPendingThroughDts(std::optional<int64_t> dts_watermark);
     bool Fail(const char* reason) noexcept;
 
     MkvPacketWriter writer_;
@@ -88,7 +90,13 @@ class MkvPacketSink final : public SynchronizedPacketSink {
     MkvWriteResult result_;
     std::vector<EncodedPacket> pending_;
     size_t pending_bytes_ = 0;
+    size_t pending_capacity_bytes_ = 0;
+    uint64_t muxer_reorder_safety_cts_ = 0;
     uint64_t common_start_cts_ = 0;
+    int32_t packet_timebase_num_ = 0;
+    int32_t packet_timebase_den_ = 0;
+    bool has_max_observed_dts_ = false;
+    int64_t max_observed_dts_ = 0;
     std::string error_;
 };
 
