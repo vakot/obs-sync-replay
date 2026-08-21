@@ -1,176 +1,232 @@
-# Agent Instructions
+# Repository Agent Instructions
 
-These instructions apply to the entire repository. The project is in the
-documentation phase; do not bootstrap or implement the plugin unless the current task
-explicitly asks for it. Add nested `AGENTS.md` files only when an existing subtree has
-genuinely different build, testing, or ownership rules.
+This file defines the top-level rules for automated coding agents working in this repository.
 
-## Read First
+Detailed rules are maintained in focused documents under `.agents/`. Read the relevant instruction files before performing work.
 
-For every non-trivial task, read the documents relevant to the change:
+## Priorities
 
-1. [`mvp-plan.md`](mvp-plan.md) -- product scope and roadmap (source of truth);
-2. [`docs/architecture.md`](docs/architecture.md) -- synchronization model and
-   architectural decisions;
-3. [`docs/testing.md`](docs/testing.md) -- required synchronization evidence;
-4. [`docs/building.md`](docs/building.md) -- intended Windows development environment;
-5. [`docs/git-workflow.md`](docs/git-workflow.md) -- mandatory Git and PR policy.
+Follow these priorities in order:
 
-If documents conflict, preserve the stricter synchronization guarantee, stop before
-making a conflicting architectural assumption, and resolve the documentation in the
-same logical change.
+1. Correctness
+2. Preserve existing user work
+3. Respect the requested scope
+4. Maintainability
+5. Verification
+6. Clean Git history
+7. Simplicity
 
-## Purpose and Core Model
+Prefer the smallest complete change that satisfies the task.
 
-Build a Windows-first OBS Studio plugin that replay-buffers exactly two independently
-configurable scenes into two MKV files. Corresponding video frames must belong to the
-same master tick:
+Do not implement speculative future requirements.
+
+Do not perform unrelated cleanup, refactoring, formatting, dependency upgrades, or architectural changes unless required by the task.
+
+Follow existing repository conventions before introducing new ones.
+
+## Instruction Files
+
+Detailed rules are organized as follows:
+
+- `.agents/code-quality.md` — implementation quality, scope discipline, architecture, dependencies, naming, error handling, maintainability, and general healthy-code practices
+- `.agents/commits.md` — commit structure, naming, scope, authorship, and atomicity
+- `.agents/git.md` — branches, working-tree safety, staging, remote operations, and history preservation
+- `.agents/orchestration.md` — subagent usage, delegation, ownership, parallelization, and orchestrator responsibilities
+- `.agents/pull-requests.md` — pull request naming, creation, template usage, and PR workflow
+- `.agents/verification.md` — builds, tests, checks, self-review, and completion verification
+
+Pull requests must use:
+
+- `.github/PULL_REQUEST_TEMPLATE.md`
+
+These instruction files are part of the repository workflow and must be followed when relevant to the current task.
+
+## Before Editing
+
+Before modifying the repository:
+
+1. inspect the current branch;
+2. inspect the working tree;
+3. identify existing uncommitted changes;
+4. read the instruction files relevant to the task;
+5. inspect the relevant code and existing architecture;
+6. determine the minimum logical scope required.
+
+At minimum, inspect:
+
+```bash
+git status
+git branch --show-current
+```
+
+Treat unrelated user-authored changes as protected.
+
+Never discard, overwrite, reset, revert, or unnecessarily reformat unrelated user work.
+
+## Scope
+
+Implement only what is required for the current task.
+
+Do not introduce unrelated:
+
+- refactors;
+- cleanup;
+- formatting changes;
+- dependency upgrades;
+- architectural redesign;
+- speculative abstractions;
+- future-facing functionality.
+
+Prefer existing project patterns and direct solutions when they are sufficient.
+
+See `.agents/code-quality.md`.
+
+## Git Workflow
+
+Every logically independent feature or unit of work must use its own branch.
+
+Create a new branch whenever explicitly requested by the user.
+
+Never perform implementation work directly on protected primary branches such as `main` or `master`.
+
+Branch names must follow:
 
 ```text
-master frame N
-|-- render Scene A -> A[N]
-`-- render Scene B -> B[N]
-
-A[N].master_frame_id == B[N].master_frame_id
-A[N].PTS             == B[N].PTS
+<type>/<username>/<optional_ticket_id>/<title>
 ```
 
-The outputs must behave temporally as if both scenes were rendered side-by-side on
-one canvas and separated afterward. Device/source latency before OBS rendering is
-outside this guarantee; the guarantee begins at the plugin's shared master tick.
-
-## Hard Synchronization Invariants
-
-1. There is exactly one logical video timeline and one authority for frame ID and PTS.
-2. Both scene renders inherit temporal identity from the same master-frame decision.
-3. Every master tick has one immutable canonical frame ID and PTS.
-4. Corresponding output frames preserve equal master-frame ID and PTS.
-5. Save Replay selects one master-frame range and applies it unchanged to both files.
-6. Start and end boundaries are never calculated independently per output.
-7. Encoder completion order never determines temporal identity.
-8. Asynchronous work must preserve the submitted master-frame identity and PTS.
-9. Missing or delayed work preserves its temporal slot; later frames never shift to
-   conceal it.
-10. Synchronization failures are explicit, observable, and logged with the violated
-    invariant.
-11. Similar wall-clock start times are not evidence of synchronization.
-12. Reject independently advancing output timelines and post-hoc drift correction.
-
-Optimize in this order and never trade an earlier item for a later one:
+Examples without a ticket:
 
 ```text
-1. Frame-perfect synchronization correctness
-2. Deterministic behavior
-3. Observability and validation
-4. Stability
-5. Performance
-6. Code simplicity
-7. Additional features
-8. UI polish
+feature/johndoe/user-preferences
+fix/johndoe/session-expiration
+refactor/johndoe/request-handler
 ```
 
-## Synchronization-Critical Changes
+Examples with a ticket:
 
-Treat master timing, frame-ID assignment, PTS generation/propagation, render
-scheduling, packet/frame association, replay-range selection, buffer eviction,
-missing-frame behavior, encoder queue association, mux boundaries, and validation as
-synchronization-critical.
-
-Before changing such behavior:
-
-1. identify the affected invariant in the plan or change summary;
-2. inspect and understand the current data flow and relevant OBS/libobs behavior;
-3. explain why the invariant remains valid;
-4. add or update focused validation/tests where practical;
-5. add diagnostic logging for every new failure mode.
-
-Fail explicitly rather than inventing offsets, sleeps, or after-the-fact repair. Use
-comments to explain timing assumptions and causality, not to narrate code:
-
-```cpp
-// Both renders inherit the master PTS; encoder completion time is not temporal identity.
+```text
+feature/johndoe/PROJ-142/user-preferences
+fix/johndoe/PROJ-231/session-expiration
 ```
 
-## Task Workflow
+If there is no ticket ID, omit that segment completely.
 
-Follow [`docs/git-workflow.md`](docs/git-workflow.md): one logical change per branch
-and PR, branches named `<type>/vakot/<optional_ticket_id>/<description>`, focused
-`<type>(<context>): <description>` commits, mandatory
-`<type>(<context>): [<optional_ticket_id>] <title>` PR titles, and Squash and Merge
-into protected `master`. Never work directly on `master`. If this directory is not a
-Git worktree, stop before implementation; initialize or clone only with user
-authorization.
+Do not push automatically.
 
-At task startup:
+Do not perform destructive or history-rewriting Git operations unless explicitly requested.
 
-1. read these instructions and the relevant detailed documents;
-2. inspect Git status/current branch and preserve unexpected user changes;
-3. identify one logical scope, branch type, and ticket ID if any;
-4. understand/update `master` and create the compliant branch before editing;
-5. inspect the implementation and identify synchronization risk;
-6. for non-trivial work, plan the subsystem, likely files, risk, validation, and
-   expected result.
+See `.agents/git.md`.
 
-Then make the smallest coherent change, build, run focused and relevant broader
-tests, inspect applicable logs/artifacts, and review the complete diff. Do not make
-drive-by changes. Update documentation only when behavior, architecture, environment,
-or workflow actually changes.
+## Commits
 
-At completion, report the branch, commits, validation performed, and PR status. Open
-a PR when explicitly requested and supported. Do not merge it unless explicitly
-instructed; any permitted integration into `master` must use the repository's Squash
-and Merge policy.
+Every logically independent change or addition should be represented by its own commit.
 
-## Engineering Conventions
+Create a commit whenever explicitly requested by the user.
 
-Organize code primarily by `src/<module>/`; keep normal component files directly in
-their module as `src/<module>/<component>.*`. Introduce deeper directories only when
-concrete complexity justifies them; do not create speculative directories or generic
-`index.*` files. See [`docs/architecture.md`](docs/architecture.md) for details.
+Commit messages must follow:
 
-Follow [`docs/building.md`](docs/building.md) and repository formatter/static-analysis
-configuration once bootstrapped. Prefer modern, unsurprising C++ with:
+```text
+<type>(<context>): <title>
+```
 
-- RAII, explicit ownership, and verified OBS/libobs lifetimes;
-- narrow responsibilities and deterministic state transitions;
-- descriptive synchronization-oriented types;
-- fixed-width integers for cross-component frame/time values;
-- injected ticks/clocks in tests rather than sleeps;
-- assertions for impossible internal states where safe and explicit runtime errors
-  for real OBS/hardware failures;
-- minimal hidden mutable global state and no speculative framework abstractions.
+Examples:
 
-Prefer names such as `MasterFrameCoordinator`, `SynchronizedReplayBuffer`,
-`ReplayFrameRange`, `SceneRenderTarget`, `OutputStreamState`, and
-`SynchronizationValidator`. Avoid vague `Manager`, `Helper`, `Processor`, or `Util`
-names unless their narrow responsibility is self-evident.
+```text
+feat(settings): add user preferences
+fix(auth): handle expired sessions
+refactor(api): simplify request handling
+```
 
-For OBS/libobs choices, prefer official documentation and source. Verify ownership,
-lifetime, threading, render cadence, timestamps, encoder behavior, and packet ordering
-before synchronization logic depends on them. Avoid private APIs unless supported APIs
-cannot satisfy the requirement and the tradeoff is documented.
+Commits must:
 
-## Scope Discipline
+- contain one logical change;
+- have exactly one author;
+- use the repository/user's configured Git identity;
+- contain no automated-agent co-author attribution;
+- contain no generated contributor trailers;
+- contain no commit body by default;
+- not be pushed automatically.
 
-The MVP targets Windows, OBS Studio, exactly two scenes at one FPS, separate MKV files,
-NVENC H.264 where practical, configurable replay duration, one save action/hotkey,
-minimal configuration UI, and strong validation/logging. Video-only is acceptable
-until synchronization is proven; audio must never weaken it.
+Do not rewrite existing commits unless explicitly requested.
 
-Defer more than two outputs, streaming, macOS/Linux, advanced audio routing, multiple
-encoder families, per-output FPS, updates/installers, extensive UI, generalized
-source recording, and abstractions for hypothetical future versions.
+See `.agents/commits.md`.
 
-## Definition of Done
+## Pull Requests
 
-Ordinary work is done when it is coherent, builds where applicable, relevant tests
-pass, the diff contains no unintended changes, and Git conventions are followed.
+Create a pull request only when explicitly requested by the user.
 
-Synchronization-critical work additionally requires the affected invariant to be
-named and demonstrated valid, appropriate validation to pass, every new failure path
-to be explicit and diagnosable, and changed architectural assumptions to be
-documented. Compilation alone is insufficient.
+Pull request titles must follow:
 
-The MVP is done only when repeated paired saves and long-running tests show identical
-master-frame ranges and temporal frame mapping with zero accumulating offset, as
-defined by [`docs/testing.md`](docs/testing.md) and `mvp-plan.md`.
+```text
+<type>(<context>): [<optional_ticket_id>] <title>
+```
+
+The ticket segment is optional and must be omitted completely when no ticket exists.
+
+Pull requests must strictly use the current repository template:
+
+```text
+.github/PULL_REQUEST_TEMPLATE.md
+```
+
+Do not replace or restructure the template.
+
+A PR request authorizes only the minimum remote operations required to publish the requested pull request. It does not authorize merging or unrelated remote changes.
+
+See `.agents/pull-requests.md`.
+
+## Agent Orchestration
+
+Do not use subagents by default.
+
+Use them when independent research, implementation, or verification materially improves the task.
+
+Prefer:
+
+```text
+parallel research
+→ orchestrator decision
+→ controlled implementation
+→ independent verification
+```
+
+Never assign overlapping write scopes to multiple agents simultaneously.
+
+The main agent remains responsible for architecture, integration, scope, verification, and Git discipline.
+
+See `.agents/orchestration.md`.
+
+## Verification
+
+Before reporting implementation work as complete:
+
+1. inspect the final diff;
+2. verify that no unrelated changes were introduced;
+3. run relevant builds, tests, and configured checks where possible;
+4. inspect the final repository state;
+5. review substantial changes as if reviewing another developer's pull request.
+
+Never claim that a check passed if it was not run.
+
+Report unavailable verification explicitly.
+
+See `.agents/verification.md`.
+
+## Git Authorization Boundaries
+
+Treat Git operations as separate permissions.
+
+Implementation does not automatically authorize a commit.
+
+A commit does not authorize a push.
+
+A push does not authorize a pull request.
+
+A pull request does not authorize a merge.
+
+History rewriting, force-pushing, branch deletion, tagging, releasing, and merging require explicit authorization unless a repository-specific workflow explicitly states otherwise.
+
+## Guiding Rule
+
+Understand the existing repository, make the smallest correct change, preserve user work, verify the result, and perform only the Git and remote operations authorized by the user.
