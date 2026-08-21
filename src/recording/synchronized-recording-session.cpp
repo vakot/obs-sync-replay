@@ -110,18 +110,32 @@ bool SynchronizedRecordingSession::PollStart(const uint64_t current_source_cts) 
 
 bool SynchronizedRecordingSession::RequestStop(const uint64_t requested_stop_cts) {
     const std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != SynchronizedRecordingState::Running) {
+    if (state_ == SynchronizedRecordingState::Draining || state_ == SynchronizedRecordingState::Stopped) {
+        return true;
+    }
+    if (state_ == SynchronizedRecordingState::Failed) {
+        return false;
+    }
+    if (state_ != SynchronizedRecordingState::Running && state_ != SynchronizedRecordingState::Starting) {
         return Fail(SynchronizedRecordingFailure::InvalidTransition);
     }
     requested_stop_cts_ = requested_stop_cts;
-    state_ = SynchronizedRecordingState::Draining;
+    if (state_ == SynchronizedRecordingState::Running) {
+        state_ = SynchronizedRecordingState::Draining;
+    }
     return true;
 }
 
 bool SynchronizedRecordingSession::CompleteDrain() {
     const std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == SynchronizedRecordingState::Stopped) {
+        return true;
+    }
+    if (state_ == SynchronizedRecordingState::Failed) {
+        return false;
+    }
     if (state_ != SynchronizedRecordingState::Draining || !selected_range_) {
-        return Fail(SynchronizedRecordingFailure::InvalidTransition);
+        return false;
     }
 
     uint64_t common_end_cts = 0;
@@ -148,6 +162,9 @@ void SynchronizedRecordingSession::Abort() noexcept {
 }
 
 void SynchronizedRecordingSession::AbortUnlocked() noexcept {
+    if (state_ == SynchronizedRecordingState::Stopped || state_ == SynchronizedRecordingState::Failed) {
+        return;
+    }
     if (sink_a_) {
         sink_a_->Abort();
     }

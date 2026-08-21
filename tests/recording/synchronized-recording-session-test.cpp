@@ -317,6 +317,30 @@ void TestStopDrainStateTransitions() {
                 session.selected_range()->end_cts == 20,
             "A/B must finalize the identical selected source range");
     Require(sink_a_view->end_cts == sink_b_view->end_cts, "both sinks must receive one common end CTS");
+
+    Require(session.RequestStop(30), "repeated stop on stopped session must be idempotent");
+    Require(session.CompleteDrain(), "repeated drain on stopped session must be idempotent");
+    session.Abort();
+    Require(session.state() == SynchronizedRecordingState::Stopped,
+            "abort after successful finalization must not regress stopped state");
+}
+
+void TestShutdownIsSafeWhileStartingAndAfterFailure() {
+    auto starting_sink_a = std::make_unique<FakeSink>();
+    auto starting_sink_b = std::make_unique<FakeSink>();
+    SynchronizedRecordingSession starting({}, StreamConfig(), StreamConfig(), std::move(starting_sink_a),
+                                          std::move(starting_sink_b));
+    Require(starting.Start(10), "starting session request");
+    Require(starting.RequestStop(10), "shutdown stop while starting must be harmless");
+    Require(starting.state() == SynchronizedRecordingState::Starting,
+            "shutdown stop while starting must not invent a common range");
+    Require(!starting.CompleteDrain(), "starting session cannot drain without a common start");
+    starting.Abort();
+    Require(starting.state() == SynchronizedRecordingState::Failed, "starting shutdown must abort explicitly");
+    Require(!starting.RequestStop(20), "stop on failed session must remain a no-op failure");
+    starting.Abort();
+    Require(starting.state() == SynchronizedRecordingState::Failed,
+            "repeated abort on failed session must be idempotent");
 }
 
 } // namespace
@@ -334,5 +358,6 @@ int main() {
     TestUnresolvedTailOverflowFailsExplicitly();
     TestTransactionalStartStopAndFailureRollback();
     TestStopDrainStateTransitions();
+    TestShutdownIsSafeWhileStartingAndAfterFailure();
     return EXIT_SUCCESS;
 }
