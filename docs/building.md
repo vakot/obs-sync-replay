@@ -2,8 +2,9 @@
 
 OBS Sync Replay is a Windows x64 native OBS module built with CMake and MSVC. The
 current research runtime includes deterministic post-startup scene bootstrap and
-synchronized rendering; encoding and replay behavior remain out of scope on this
-branch.
+synchronized rendering. Full Recording and Replay integration remain out of scope;
+the disposable Phase 6 three-stream encoded capture POC is enabled in the research
+runtime.
 
 ## Pinned OBS Development Baseline
 
@@ -90,6 +91,14 @@ Deploy Debug, then launch the explicitly configured portable executable:
 ```powershell
 .\scripts\deploy-dev.ps1 -Configuration Debug
 .\scripts\run-obs-dev.ps1
+```
+
+Pass `-SkipUpdateCheck` to the launcher, or to `dev.ps1` when building and
+launching together, to pass OBS's public `--disable-updater` startup option:
+
+```powershell
+.\scripts\run-obs-dev.ps1 -SkipUpdateCheck
+.\scripts\dev.ps1 -SkipUpdateCheck
 ```
 
 The deployment layout matches OBS's Windows module paths:

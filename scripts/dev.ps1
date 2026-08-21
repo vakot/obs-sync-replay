@@ -3,7 +3,8 @@ param(
   [ValidateSet('Debug', 'Release')]
   [string]$Configuration = 'Debug',
   [string]$ObsDevRoot,
-  [switch]$NoLaunch
+  [switch]$NoLaunch,
+  [switch]$SkipUpdateCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,5 +25,9 @@ if ($LASTEXITCODE -ne 0) {
 
 & (Join-Path $PSScriptRoot 'deploy-dev.ps1') -Configuration $Configuration -ObsDevRoot $ObsDevRoot
 if (-not $NoLaunch) {
-  & (Join-Path $PSScriptRoot 'run-obs-dev.ps1') -ObsDevRoot $ObsDevRoot
+  $launchArguments = @{ ObsDevRoot = $ObsDevRoot }
+  if ($SkipUpdateCheck) {
+    $launchArguments.SkipUpdateCheck = $true
+  }
+  & (Join-Path $PSScriptRoot 'run-obs-dev.ps1') @launchArguments
 }

@@ -58,6 +58,7 @@ add_library(
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
+  src/experiment/three-stream-capture-poc.cpp
   src/plugin/plugin-main.cpp
   src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
