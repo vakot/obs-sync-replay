@@ -397,13 +397,35 @@ hotkeys, and settings inheritance remain outside this phase.
 
 The Recording session starts both stock pipelines as a preparation step, buffers
 packets until a common keyframe CTS is observed, then opens both MKV sinks from that
-same CTS. Because encoder callbacks can deliver higher source CTS values before
-earlier encoded packets, the session retains a bounded compressed-packet window while
-running and does not commit a partial prefix. Stop changes the session to `Draining`;
-both outputs are stopped, callbacks are allowed to finish, one common end CTS is
-selected, and both sinks receive that exact range in per-stream DTS order before
-finalization. A missing packet-time, duplicate CTS, range mismatch, sink failure, or
-capacity overflow is a failed transaction with no synchronized success result.
+same CTS. After startup, each stream retains an ordered compressed-packet tail and
+tracks its highest observed public source CTS. The shared running watermark is:
+
+```text
+min(highest_observed_cts_A, highest_observed_cts_B) - reorder_safety_cts
+```
+
+Only the strict A/B common source-CTS prefix at or below that watermark is passed to
+the sinks. The safety window is an explicit encoder-completion reordering budget
+(5 seconds in the stock x264/NVENC research runner). Each sink converts that budget
+to the packet timebase and applies a second DTS watermark, so callback/source order
+cannot force an older decode timestamp after a committed packet. A tail overflow or
+packet that arrives at or below a committed CTS fails the transaction instead of
+allowing a late packet to rewrite muxed history. The session and each sink have fixed
+byte limits, so recording duration does not increase retained compressed memory.
+
+The common prefix also checks the configured OBS frame interval, allowing only one
+nanosecond of rational-clock rounding. A missing or delayed logical slot therefore
+blocks later CTS values even when both streams are missing that slot; it cannot be
+mistaken for a completed common prefix. Unit tests may infer the interval from the
+first paired packets, but the OBS runtime passes `obs_get_frame_interval_ns()`
+explicitly so initial encoder sparsity cannot establish a false cadence.
+
+Stop changes the session to `Draining`; both outputs are stopped, callbacks are
+allowed to finish, the remaining strict common prefix through the requested stop CTS
+selects one exact `commonEndCTS`, and both sinks receive that range in per-stream DTS
+order before finalization. A missing packet-time, duplicate CTS, unsafe late packet,
+range mismatch, sink failure, or capacity overflow is a failed transaction with no
+synchronized success result.
 
 Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and

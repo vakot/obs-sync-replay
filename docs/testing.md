@@ -95,18 +95,28 @@ not just in-memory expectations.
 
 The Phase 5 research runner uses stock `null_output` only as a compressed-packet
 source. The plugin-owned `MkvPacketSink` receives copied packet payloads and codec
-extradata, retains a bounded decode-reorder buffer, and commits each stream only
-after the session has selected the same common range for both outputs. Runtime
-success requires one common start and end CTS, equal selected source bounds, zero
-range mismatches, and successful finalization for both files. The current normal-
-Recording slice retains the compressed window until stop so late encoder callbacks
-cannot move an already-muxed packet; capacity exhaustion fails explicitly and is a
-known limitation for recordings longer than the configured bounded window.
+extradata, retains only a bounded DTS-ordering tail, and receives only the same strict
+source-CTS common prefix for both streams. It then commits only the DTS-stable prefix
+of that source range. Runtime success requires one common start and end CTS, equal
+selected source bounds, zero range mismatches, successful incremental commits, and
+successful finalization for both files. The default runtime safety budget is 5 seconds
+of public source CTS, converted into each packet timebase for the DTS watermark;
+packets arriving older than the committed watermark or exceeding either byte bound
+fail explicitly. This makes a multi-hour normal recording use approximately the same
+compressed-packet memory as a short recording.
+The result log includes per-stream `peak_tail_bytes_a` and `peak_tail_bytes_b` in
+addition to the final empty-tail counters, so steady-state memory can be checked
+without treating finalization as the steady-state measurement.
+
+The focused session test also runs a three-hour synthetic 60 FPS logical timeline and
+asserts that retained tail bytes remain bounded after incremental commits. It covers
+asymmetric callback arrival, strict-prefix safety when one stream is ahead, reordered
+PTS/DTS at Stop, partial-streaming failure, and transactional finalization failure.
 
 On 2026-08-21, a clean portable smoke run completed both x264 and NVENC H.264
 sessions with `state=stopped failure=none`. FFprobe decoded the resulting A/B MKVs;
-the x264 pair contained 173 frames each and the NVENC pair 182 frames each, with
-identical per-packet PTS/DTS/keyframe metadata within each pair.
+the x264 pair contained 1798 frames each and the NVENC pair 1804 frames each, with
+identical per-packet PTS/DTS/keyframe metadata and equal durations within each pair.
 
 ### OBS end-to-end tests
 
