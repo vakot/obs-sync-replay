@@ -1,4 +1,5 @@
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 
 #include "bootstrap/deterministic-test-environment.hpp"
 #include "experiment/stock-encoder-timeline-probe.hpp"
