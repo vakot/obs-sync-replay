@@ -1,8 +1,9 @@
 # Build and Development Environment
 
 OBS Sync Replay is a Windows x64 native OBS module built with CMake and MSVC. The
-bootstrap intentionally contains only module lifecycle code; synchronized rendering,
-encoding, and replay behavior remain out of scope.
+current research runtime includes deterministic post-startup scene bootstrap and
+synchronized rendering; encoding and replay behavior remain out of scope on this
+branch.
 
 ## Pinned OBS Development Baseline
 
@@ -101,6 +102,47 @@ The deployment layout matches OBS's Windows module paths:
 The deploy script copies only the plugin DLL and its data files. It reports every
 destination and fails when the artifact, portable executable, or portable marker is
 missing.
+
+## Clean Stock-OBS Research Runtime
+
+The stock-OBS experiment must start from a disposable clean runtime. After deploying
+the plugin, use the research launcher rather than `run-obs-dev.ps1`:
+
+```powershell
+.\scripts\run-obs-research.ps1
+```
+
+The launcher refuses to reset a running portable OBS process, removes only the
+configured runtime's `config` directory and this plugin's data directory, then creates
+the minimum profile file needed before OBS initializes video. It starts stock OBS
+with `--portable --multi --profile "Sync Replay Research"`. It does not create a
+scene collection, recording output, replay-buffer setting, encoder setting, or test
+source in the profile.
+
+The generated profile contains exactly these video values:
+
+```text
+BaseCX=1920       BaseCY=1080
+OutputCX=1920     OutputCY=1080
+FPSType=0        FPSCommon=60
+ScaleType=bicubic ColorFormat=NV12
+ColorSpace=709   ColorRange=Partial
+```
+
+The clean-runtime `user.ini` selects the generated profile and sets only
+`General/FirstRun=true` to prevent first-run sources. OBS's normal startup then
+activates its empty scene collection and initializes the video pipeline from the
+generated profile. The plugin waits for the frontend finished-loading event after
+that activation, verifies the observed 1920x1080 at 60/1 configuration, removes
+stock OBS's sole empty placeholder scene, rechecks zero remaining input/scene
+sources, and creates two `color_source` inputs in `Sync Research Scene A` and
+`Sync Research Scene B`. No hardware or
+existing source name is required.
+
+The launcher and plugin log every reset, profile creation, source check, scene/source
+creation, video check, and coordinator start. A run is invalid if the plugin emits a
+`[sync-bootstrap] ... failed` line or never emits the empty-placeholder cleanup,
+`clean-source-check` with zero counts, and `complete`.
 
 For a one-command Debug iteration (configure, build, deploy, and launch):
 
