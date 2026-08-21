@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 
-Decision: **C. NOT GUARANTEED — stock independent encoder pipelines can begin or progress on different logical slots.**
+Previous startup-boundary result: stock independent encoder pipelines can begin or progress on different logical slots; packet-level CTS analysis is documented below.
 
 The experiment did not weaken the required zero-frame skew criterion. It observed
 different first packet composition timestamps and unequal packet mappings during
@@ -336,4 +336,182 @@ association additions, but this probe did not call them. The architecture claims
 based on the official 32.2.1 source paths linked above; runtime evidence should be
 repeated with an unmodified official binary if clean-binary provenance is required.
 
-Conclusion: C. BOUNDARIES ARE NOT EXACTLY OBSERVABLE.
+The previous startup-boundary conclusion remains valid for physical encoder
+activation and private source-frame IDs. The follow-up CTS experiment below refines
+the packet-level result: stock packet timing can expose the absolute source timestamp
+for packets whose timing association is present.
+
+## Common steady-state epoch and packet-only normalization
+
+This follow-up tests a different product boundary: encoders remain continuously
+running, the plugin establishes an epoch from a public root-tick callback, and a
+packet-owned range layer selects common source timestamps for Recording or Replay.
+
+### 1. Possible stock synchronization primitives
+
+The available public mechanisms are:
+
+- `obs_add_tick_callback()`, which runs during the root graphics-thread tick before
+  source/render processing; the callback can sample
+  `obs_get_video_frame_time()` and `obs_get_total_frames()`;
+- `obs_encoder_group_t`, which coordinates startup and grouped reconfiguration;
+- `obs_encoder_update()`, which can request an encoder settings update and, for a
+  group, schedules reconfiguration at a group alignment point;
+- `obs_output_start()`/`obs_output_stop()` and
+  `obs_output_add_packet_callback()`;
+- encoder settings such as keyframe interval and the public `encoder_packet.keyframe`
+  flag.
+
+There is no stock public `request_keyframe` or synchronous reset-to-this-root-tick
+API. A keyframe request on all encoders cannot be assumed atomic; this probe did not
+pretend that one exists. Group reconfiguration is a coordination mechanism, not a
+public callback that returns the exact source tick at which all encoders accepted a
+frame.
+
+### 2. Exact common epoch
+
+An exact packet epoch can be established after both encoders are running by executing
+the epoch marker in `obs_add_tick_callback()` and recording the current root video
+timestamp. The marker is a root OBS timestamp, not a worker-thread wall-clock guess.
+Packets are admitted only when their public `encoder_packet_time.cts` is at or after
+that epoch. If either packet lacks timing metadata, the range must fail validation
+rather than infer identity from callback order.
+
+The epoch is exact at the packet source-timestamp level. It is not an atomic request
+to both encoder implementations; the proof comes from the packet CTS values that
+are later observed, not from the act of requesting the marker.
+
+### 3. Tie to one root OBS slot
+
+Official 32.2.1 `obs-video.c` assigns the current root timestamp to each video mix;
+the raw encoder path passes the frame timestamp into `do_encode`, and the texture
+encoder path records the texture frame timestamp in the encoder packet timing entry.
+The official `obs-encoder.c` then associates that timing entry with the encoded
+packet by encoder-local PTS. Therefore `encoder_packet_time.cts` is the absolute
+source timestamp for that encoded packet, while local PTS remains only the encoder
+ordering coordinate.
+
+The public timestamp does not expose OBS's private source-frame ID, but at fixed
+60-FPS it is an exact root-slot coordinate: the slot is identified by its immutable
+root timestamp, including a repeated slot's distinct timestamp when OBS advances a
+late frame by multiple intervals.
+
+### 4. Packet metadata after the epoch
+
+The packet callback exposes packet data, PTS, DTS, timebase, keyframe status, and
+`encoder_packet_time` CTS/FER/FERC/PIR. CTS is the source-slot coordinate; FER/FERC
+describe encoder processing; PIR describes output interleave timing. DTS must govern
+decode-order muxing, while CTS/source timestamp governs product-range membership.
+
+B-frame reordering is therefore not an identity ambiguity when timing metadata is
+present: packets may arrive or decode in a different order, but their source CTS is
+still the range key. Missing packet timing, duplicate CTS values, or a source-CTS
+set mismatch is an explicit synchronization failure.
+
+### 5. x264 result
+
+Fresh continuous run log: [`2026-08-21 16-34-42.txt`](../obs-dev/config/obs-studio/logs/2026-08-21%2016-34-42.txt).
+
+The x264 run collected 360 root-tick epoch attempts; 358 were usable. All 358 had
+equal first packet CTS values, all 358 first CTS values exactly equaled the sampled
+root epoch, and all 358 had a common keyframe CTS. Over 180 seconds, both outputs
+had 10,765 packets, zero source-CTS mismatches, zero local packet-map mismatches,
+four source-PTS gap diagnostics, and zero lagged frames.
+
+### 6. NVENC result
+
+The NVENC run collected 360 root-tick epoch attempts; 359 were usable. All 359 had
+equal first packet CTS values, all 359 first CTS values exactly equaled the sampled
+root epoch, and 358 had a common keyframe CTS. Over 180 seconds, both outputs had
+10,785 packets, zero source-CTS mismatches, zero local packet-map mismatches, four
+source-PTS gap diagnostics, and zero lagged frames.
+
+The missing one or two epoch attempts were not repaired or guessed; they were
+excluded as unusable because the post-epoch packet observation did not provide both
+required packet records.
+
+### 7. Keyframe and GOP analysis
+
+The probe found no public stock API for forcing a keyframe synchronously. Natural or
+encoder-scheduled keyframes can nevertheless be compared by their exact source CTS;
+the run observed common keyframe CTS for nearly every usable epoch. A plugin can
+choose a common decodable keyframe after observing it, or retain earlier dependency
+packets as codec pre-roll if the chosen mux/container/player semantics are explicitly
+validated.
+
+An arbitrary visible start inside a GOP is not automatically independently decodable.
+An arbitrary visible end can also require packets whose decode dependencies have a
+later presentation timestamp. Without re-encoding, the robust portable guarantee is
+to select a common keyframe/GOP boundary. Exact arbitrary frame-range presentation
+requires tested decode-only pre-roll/discard semantics; it cannot be assumed from
+PTS rebasing.
+
+### 8. Recording design
+
+Recording can use a compressed pre-roll ring per output. The plugin records the root
+epoch CTS, admits only packets whose source CTS belongs to the validated common
+range, and muxes packets in DTS order. At the end, it marks one root end CTS, keeps
+accepting packets until encoder/output drain completes, discards packets after the
+common end, and finalizes both files from the same source-CTS range.
+
+The writer must fail closed if timing metadata is missing, if the two source-CTS
+sets differ, or if codec dependency handling cannot make the selected boundary
+decodable. No pixel readback or second video encode is needed.
+
+### 9. Replay design
+
+Replay uses the same packet ring and source-CTS index. Save Replay selects one
+`[common_start_cts, common_end_cts]` interval for both outputs, retains packets in
+decode order plus any explicitly supported codec pre-roll, and submits each packet
+once to the muxer. The two files must report the same selected source-CTS set and
+frame count before the save is accepted.
+
+### 10. Common-end design
+
+The plugin can mark `common_end_cts` from a root tick while encoders continue. It
+must not use stop-call time or callback arrival order as the end. It stops or pauses
+acceptance only after sufficient encoded packets have arrived and the encoder/output
+flush has drained, then discards every packet with source CTS after the marker.
+
+The last visible frame is exact at the packet-source level when both streams contain
+the same final CTS. For independently decodable files, the end must also satisfy
+codec dependency rules; otherwise the plugin selects the earlier common safe GOP
+boundary or rejects the requested exact save.
+
+### 11. Muxing choice
+
+Stock `obs_output_t` packet callbacks are observers, not packet filters: stock output
+continues its own interleave/mux path after invoking callbacks. They cannot enforce a
+common range in a normal stock Recording or Replay file.
+
+The production path therefore needs a plugin-owned compressed-packet muxer, most
+naturally libavformat/MKV, using `obs_encoder_packet_ref()`/release ownership rules,
+encoder extradata, packet timebases, DTS ordering, and the validated source-CTS
+range. This is remuxing, not re-encoding. A stock output can remain a disposable
+probe sink, but not the enforcement point.
+
+### 12. Resource cost
+
+The path requires packet references/copies, a small metadata index, and a bounded
+compressed ring. It performs no continuous GPU-to-CPU raw-frame readback and adds no
+second encoder. At a nominal 10,000 kbps stream, one second of compressed buffering
+is approximately 1.25 MB per output before container/metadata overhead; a 3-second
+pre-roll for two outputs is approximately 7.5 MB. Muxing cost is packet interleave
+and container I/O, with latency determined by the configured pre-roll and codec
+drain depth rather than another encode.
+
+### 13. Remaining ambiguity
+
+Exact packet source timestamps are now directly observable through public stock
+`encoder_packet_time.cts`, and the runtime evidence supports a common steady-state
+epoch for x264 and NVENC. Remaining constraints are: packets with missing timing,
+source slots for which an encoder emits no packet, root/packet observation failure,
+codec dependency packets outside an arbitrary visible range, and player/container
+behavior for decode-only pre-roll or discard semantics.
+
+The safe product contract is therefore: enforce equal source-CTS sets and equal
+first/last CTS values, fail closed on any mismatch, and use a common decodable
+keyframe/GOP boundary unless the chosen libavformat/MKV playback contract proves
+arbitrary-frame pre-roll/end handling.
+
+Conclusion: C. KEYFRAME-ALIGNED ONLY.
