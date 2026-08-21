@@ -11,13 +11,7 @@ option(OBS_SYNC_REPLAY_WARNINGS_AS_ERRORS "Treat plugin compiler warnings as err
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ObsSdk)
 
-add_library(
-  obs-sync-replay-timeline
-  STATIC
-  src/timeline/experimental-graphics-lag-injector.cpp
-  src/timeline/logical-video-slot-timeline.cpp
-  src/timeline/master-frame-timeline.cpp
-)
+add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.cpp)
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
@@ -40,15 +34,13 @@ add_library(
   obs-sync-replay
   MODULE
   src/plugin/plugin-main.cpp
-  src/encoding/native-obs-encoder-experiment.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
 )
 target_link_libraries(
   obs-sync-replay
-  PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination
-          obs-sync-replay-pipeline
+  PRIVATE OBS::libobs obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
@@ -106,16 +98,6 @@ if(MSVC)
   target_compile_options(synchronized-frame-queue-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME synchronized-frame-queue COMMAND synchronized-frame-queue-test)
-
-add_executable(
-  encoder-input-association-test
-  tests/encoding/encoder-input-association-test.cpp
-)
-target_compile_features(encoder-input-association-test PRIVATE cxx_std_17)
-if(MSVC)
-  target_compile_options(encoder-input-association-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
-endif()
-add_test(NAME encoder-input-association COMMAND encoder-input-association-test)
 
 add_test(
   NAME plugin-artifact
