@@ -52,6 +52,9 @@ bool CollectScene(void* param, obs_source_t* source) {
 
 std::vector<DiscoveredObsScene> DiscoverObsScenes() {
     std::vector<DiscoveredObsScene> scenes;
+    // obs_enum_scenes enumerates the scene collection's top-level scenes. Do not
+    // recurse through scene items: groups, nested scenes, and ordinary sources
+    // are content of one capture scene, not independent video streams.
     obs_enum_scenes(CollectScene, &scenes);
     return scenes;
 }

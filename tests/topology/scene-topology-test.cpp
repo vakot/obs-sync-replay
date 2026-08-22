@@ -38,6 +38,40 @@ void TestMasterAndDeterministicOrder() {
             "scene collection order must be deterministic");
 }
 
+void TestZeroOneManyRealScenes() {
+    SceneTopologyModel model;
+    Require(model.current().streams.size() == 1, "zero real scenes must produce a Master-only topology");
+
+    Require(model.ApplyDiscovery(Scenes({{"gameplay-uuid", "Gameplay"}}), false) == TopologyUpdateResult::Applied,
+            "one arbitrary real scene must apply while idle");
+    Require(model.current().streams.size() == 2 &&
+                model.current().streams[1].identity == StreamIdentity::Scene("gameplay-uuid") &&
+                model.current().streams[1].display_name == "Gameplay",
+            "one arbitrary real scene must be the only non-Master stream");
+
+    Require(model.ApplyDiscovery(
+                Scenes({{"camera-uuid", "Camera"}, {"brb-uuid", "BRB"}, {"nested-uuid", "Nested Scene"},
+                        {"intro-uuid", "Intro"}}),
+                false) == TopologyUpdateResult::Applied,
+            "many arbitrary real scenes must apply while idle");
+    Require(model.current().streams.size() == 5, "many real scenes must produce Master plus N streams");
+    Require(model.current().streams[1].display_name == "Camera" &&
+                model.current().streams[4].display_name == "Intro",
+            "many real scenes must preserve OBS collection order and display names");
+}
+
+void TestTopLevelScenesOnly() {
+    SceneTopologyModel model;
+    Require(model.ApplyDiscovery(Scenes({{"gameplay-uuid", "Gameplay"}, {"camera-uuid", "Camera"},
+                                         {"brb-uuid", "BRB"}}),
+                                false) == TopologyUpdateResult::Applied,
+            "top-level scene discovery must apply while idle");
+    Require(model.current().streams.size() == 4 &&
+                model.current().streams[1].display_name == "Gameplay" &&
+                model.current().streams[3].display_name == "BRB",
+            "groups, nested scenes, and ordinary sources must not add video streams");
+}
+
 void TestRenameAddRemoveWhileIdle() {
     SceneTopologyModel model;
     Require(model.ApplyDiscovery(Scenes({{"uuid-a", "Before"}}), false) == TopologyUpdateResult::Applied,
@@ -104,6 +138,8 @@ void TestIdentityCanKeyFutureParticipation() {
 
 int main() {
     TestMasterAndDeterministicOrder();
+    TestZeroOneManyRealScenes();
+    TestTopLevelScenesOnly();
     TestRenameAddRemoveWhileIdle();
     TestImmutableActiveEpochAndPendingTopology();
     TestIdentityCanKeyFutureParticipation();

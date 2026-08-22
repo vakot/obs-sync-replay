@@ -622,8 +622,10 @@ void PluginCaptureRuntime::FinishCaptureEpochIfIdle() {
 void PluginCaptureRuntime::LogTopology(const char* event) const {
     const SceneTopologySnapshot& topology = topology_model_.capture_epoch_active() ? topology_model_.active_epoch()
                                                                                      : topology_model_.current();
-    blog(LOG_INFO, "[topology] event=%s generation=%llu stream_count=%zu epoch_active=%s pending=%s", event,
-         static_cast<unsigned long long>(topology.generation), topology.streams.size(),
+    const size_t top_level_scene_count = topology.streams.empty() ? 0 : topology.streams.size() - 1;
+    blog(LOG_INFO,
+         "[topology] event=%s generation=%llu top_level_scene_count=%zu stream_count=%zu epoch_active=%s pending=%s",
+         event, static_cast<unsigned long long>(topology.generation), top_level_scene_count, topology.streams.size(),
          topology_model_.capture_epoch_active() ? "true" : "false", topology_model_.has_pending() ? "true" : "false");
     for (const SceneTopologyEntry& entry : topology.streams) {
         blog(LOG_INFO, "[topology] stream kind=%s identity=%s name=%s order=%zu recording=%s replay=%s",

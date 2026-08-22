@@ -243,7 +243,7 @@ MODULE_EXPORT const char* obs_module_name(void) {
 }
 
 MODULE_EXPORT const char* obs_module_description(void) {
-    return "Frame-perfect synchronized replay for two OBS scenes";
+    return "Frame-perfect synchronized replay for the OBS program and scene collection";
 }
 
 bool obs_module_load(void) {
@@ -255,7 +255,9 @@ bool obs_module_load(void) {
 void obs_module_post_load(void) {
     frontend_registered = true;
     obs_frontend_add_event_callback(OnFrontendEvent, nullptr);
-    blog(LOG_INFO, "[sync-bootstrap] waiting for frontend finished-loading; no capture will start automatically");
+    blog(LOG_INFO,
+         "[obs-sync-replay] waiting for OBS frontend finished-loading before discovering the current scene collection; "
+         "capture remains idle");
 }
 
 void obs_module_unload(void) {
