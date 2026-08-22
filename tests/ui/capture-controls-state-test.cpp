@@ -37,6 +37,8 @@ void TestIdlePresentation() {
     const CaptureControlsPresentation presentation = MakeCaptureControlsPresentation(
         CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, false, false, labels);
     Require(presentation.recording.state == CaptureControlVisualState::Inactive, "idle recording state");
+    Require(!CaptureControlUsesNativeActiveStyle(presentation.recording.state),
+            "inactive recording must not use active styling");
     Require(presentation.recording.text == labels.start_recording && presentation.recording.enabled,
             "idle recording button");
     Require(presentation.replay.text == labels.start_replay_buffer && presentation.replay.enabled,
@@ -63,6 +65,9 @@ void TestTransitionsAndSave() {
         labels);
     Require(active.recording.text == labels.stop_recording && active.recording.enabled, "active recording button");
     Require(active.replay.text == labels.stop_replay_buffer && active.replay.enabled, "active replay button");
+    Require(CaptureControlUsesNativeActiveStyle(active.recording.state) &&
+                CaptureControlUsesNativeActiveStyle(active.replay.state),
+            "recording and replay must activate independently");
     Require(active.save_replay_visible, "save must be visible while replay is active");
     Require(active.save_replay_enabled, "save must be enabled while replay is active");
 
@@ -71,7 +76,9 @@ void TestTransitionsAndSave() {
         labels);
     Require(saving.replay.state == CaptureControlVisualState::Saving && !saving.replay.enabled,
             "saving must disable replay toggle");
-    Require(saving.replay.text == labels.saving_replay, "save transition label must be localized");
+    Require(saving.replay.text == labels.stop_replay_buffer, "replay save must keep the stop label");
+    Require(CaptureControlUsesNativeActiveStyle(saving.replay.state),
+            "replay must remain active-styled while saving");
     Require(saving.save_replay_visible, "save must remain visible while a save is active");
     Require(!saving.save_replay_enabled, "saving must prevent duplicate save");
 
@@ -80,6 +87,8 @@ void TestTransitionsAndSave() {
         labels);
     Require(stopping.save_replay_visible && !stopping.save_replay_enabled,
             "stopping must retain but disable the save control until replay stops");
+    Require(CaptureControlUsesNativeActiveStyle(stopping.replay.state),
+            "replay must retain active styling while stopping");
 }
 
 void TestFailurePresentation() {
@@ -99,6 +108,9 @@ void TestFailurePresentation() {
             "replay command failure must be visible in replay control state");
     Require(!command_failed.save_replay_visible && !command_failed.save_replay_enabled,
             "replay failure must hide and disable save");
+    Require(!CaptureControlUsesNativeActiveStyle(failed.recording.state) &&
+                !CaptureControlUsesNativeActiveStyle(failed.replay.state),
+            "failed controls must not use active styling");
 }
 
 void TestLookupFallbacks() {

@@ -22,7 +22,7 @@ void SetButtonClasses(QPushButton* button, const CaptureControlVisualState state
         return;
     }
     QString classes = button->property("obsSyncReplayBaseClass").toString();
-    const QString state_class = state == CaptureControlVisualState::Active
+    const QString state_class = CaptureControlUsesNativeActiveStyle(state)
                                     ? QStringLiteral("state-active")
                                     : state == CaptureControlVisualState::Failed ? QStringLiteral("text-danger") : QString();
     if (!state_class.isEmpty()) {
@@ -32,8 +32,11 @@ void SetButtonClasses(QPushButton* button, const CaptureControlVisualState state
         classes += state_class;
     }
     button->setProperty("class", classes);
-    button->style()->unpolish(button);
-    button->style()->polish(button);
+    // OBS's setClasses helper forces the stylesheet engine to recalculate
+    // selectors such as QPushButton.state-active after changing the class property.
+    const QString stylesheet = button->styleSheet();
+    button->setStyleSheet(QStringLiteral("/* */"));
+    button->setStyleSheet(stylesheet);
 }
 
 } // namespace

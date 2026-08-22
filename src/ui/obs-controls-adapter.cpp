@@ -179,6 +179,7 @@ void ObsControlsAdapter::CopyNativeAppearance(QPushButton* native, QPushButton* 
     replacement->setToolTip(native->toolTip());
     replacement->setAccessibleName(native->accessibleName());
     replacement->setStyleSheet(native->styleSheet());
+    replacement->setObjectName(native->objectName());
     replacement->setProperty("obsSyncReplayBaseClass", native->property("class"));
     if (native->objectName() == QStringLiteral("saveReplayButton")) {
         const int native_height = native->sizeHint().height();

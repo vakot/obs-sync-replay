@@ -16,6 +16,11 @@ enum class CaptureControlVisualState : uint8_t {
     Failed,
 };
 
+constexpr bool CaptureControlUsesNativeActiveStyle(const CaptureControlVisualState state) noexcept {
+    return state == CaptureControlVisualState::Active || state == CaptureControlVisualState::Saving ||
+           state == CaptureControlVisualState::Stopping;
+}
+
 struct CaptureButtonPresentation final {
     CaptureControlVisualState state = CaptureControlVisualState::Inactive;
     std::string text;
@@ -73,7 +78,7 @@ inline CaptureControlsPresentation MakeCaptureControlsPresentation(
             presentation.save_replay_enabled = true;
             break;
         case ReplayConsumerState::Saving:
-            presentation.replay = {CaptureControlVisualState::Saving, labels.saving_replay, false, true};
+            presentation.replay = {CaptureControlVisualState::Saving, labels.stop_replay_buffer, false, true};
             presentation.save_replay_visible = true;
             break;
         case ReplayConsumerState::Stopping:
