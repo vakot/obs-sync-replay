@@ -27,6 +27,7 @@ struct CaptureControlsPresentation final {
     CaptureButtonPresentation recording;
     CaptureButtonPresentation replay;
     std::string save_replay_text;
+    bool save_replay_visible = false;
     bool save_replay_enabled = false;
 };
 
@@ -68,13 +69,16 @@ inline CaptureControlsPresentation MakeCaptureControlsPresentation(
             break;
         case ReplayConsumerState::Running:
             presentation.replay = {CaptureControlVisualState::Active, labels.stop_replay_buffer, true, true};
+            presentation.save_replay_visible = true;
             presentation.save_replay_enabled = true;
             break;
         case ReplayConsumerState::Saving:
             presentation.replay = {CaptureControlVisualState::Saving, labels.saving_replay, false, true};
+            presentation.save_replay_visible = true;
             break;
         case ReplayConsumerState::Stopping:
             presentation.replay = {CaptureControlVisualState::Stopping, labels.stopping_replay_buffer, false, true};
+            presentation.save_replay_visible = true;
             break;
         }
     }

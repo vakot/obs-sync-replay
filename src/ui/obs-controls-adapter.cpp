@@ -6,6 +6,7 @@
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QWidget>
 
@@ -179,6 +180,14 @@ void ObsControlsAdapter::CopyNativeAppearance(QPushButton* native, QPushButton* 
     replacement->setAccessibleName(native->accessibleName());
     replacement->setStyleSheet(native->styleSheet());
     replacement->setProperty("obsSyncReplayBaseClass", native->property("class"));
+    if (native->objectName() == QStringLiteral("saveReplayButton")) {
+        const int native_height = native->sizeHint().height();
+        if (native_height > 0) {
+            replacement->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            replacement->setFixedSize(native_height, native_height);
+        }
+        replacement->setText(QString());
+    }
     replacement->style()->unpolish(replacement);
     replacement->style()->polish(replacement);
 }

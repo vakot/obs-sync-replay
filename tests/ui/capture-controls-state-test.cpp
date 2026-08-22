@@ -42,6 +42,7 @@ void TestIdlePresentation() {
     Require(presentation.replay.text == labels.start_replay_buffer && presentation.replay.enabled,
             "idle replay button");
     Require(presentation.save_replay_text == labels.save_replay, "save label must come from localization");
+    Require(!presentation.save_replay_visible, "save must be hidden while replay is inactive");
     Require(!presentation.save_replay_enabled, "save must be disabled while replay is inactive");
 }
 
@@ -62,6 +63,7 @@ void TestTransitionsAndSave() {
         labels);
     Require(active.recording.text == labels.stop_recording && active.recording.enabled, "active recording button");
     Require(active.replay.text == labels.stop_replay_buffer && active.replay.enabled, "active replay button");
+    Require(active.save_replay_visible, "save must be visible while replay is active");
     Require(active.save_replay_enabled, "save must be enabled while replay is active");
 
     const CaptureControlsPresentation saving = MakeCaptureControlsPresentation(
@@ -70,7 +72,14 @@ void TestTransitionsAndSave() {
     Require(saving.replay.state == CaptureControlVisualState::Saving && !saving.replay.enabled,
             "saving must disable replay toggle");
     Require(saving.replay.text == labels.saving_replay, "save transition label must be localized");
+    Require(saving.save_replay_visible, "save must remain visible while a save is active");
     Require(!saving.save_replay_enabled, "saving must prevent duplicate save");
+
+    const CaptureControlsPresentation stopping = MakeCaptureControlsPresentation(
+        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Stopping, false, false,
+        labels);
+    Require(stopping.save_replay_visible && !stopping.save_replay_enabled,
+            "stopping must retain but disable the save control until replay stops");
 }
 
 void TestFailurePresentation() {
@@ -88,6 +97,8 @@ void TestFailurePresentation() {
         CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, false, true, labels);
     Require(command_failed.replay.state == CaptureControlVisualState::Failed && !command_failed.replay.enabled,
             "replay command failure must be visible in replay control state");
+    Require(!command_failed.save_replay_visible && !command_failed.save_replay_enabled,
+            "replay failure must hide and disable save");
 }
 
 void TestLookupFallbacks() {

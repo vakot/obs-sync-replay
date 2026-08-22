@@ -45,6 +45,7 @@ CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent)
     replay_button_->setObjectName(QStringLiteral("obsSyncReplayReplayButton"));
     save_replay_button_ = new QPushButton(parent);
     save_replay_button_->setObjectName(QStringLiteral("obsSyncReplaySaveButton"));
+    save_replay_button_->setVisible(false);
 
     status_ = new QLabel(parent);
     status_->setObjectName(QStringLiteral("obsSyncReplayStatus"));
@@ -98,6 +99,7 @@ void CaptureControls::DisableControls() {
     recording_button_->setEnabled(false);
     replay_button_->setEnabled(false);
     save_replay_button_->setEnabled(false);
+    save_replay_button_->setVisible(false);
 }
 
 void CaptureControls::InvokeRecording() {
@@ -170,9 +172,8 @@ void CaptureControls::ApplyPresentation() {
     replay_button_->setVisible(presentation.replay.visible);
     SetButtonClasses(replay_button_, presentation.replay.state);
 
-    save_replay_button_->setText(to_qstring(presentation.save_replay_text));
     save_replay_button_->setEnabled(presentation.save_replay_enabled);
-    save_replay_button_->setVisible(true);
+    save_replay_button_->setVisible(presentation.save_replay_visible);
     SetButtonClasses(save_replay_button_, CaptureControlVisualState::Inactive);
 }
 
