@@ -335,4 +335,6 @@ portable runtime observer confirms plugin-owned idle startup/shutdown with stock
 outputs inactive and native controls restored. A standard event sequence for
 plugin-owned actions is intentionally not claimed because OBS provides no supported
 public event emitter and the UI automation bridge is not available in the
-validation environment.
+validation environment. The output-substitution audit is source-level: no public
+frontend output registration or replacement boundary exists, so no dummy output was
+started or left running for compatibility purposes.

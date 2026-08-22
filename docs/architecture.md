@@ -501,4 +501,7 @@ internal `OBSBasic` handlers around stock output lifecycles. The compatibility
 boundary and third-party implications are documented in
 [`frontend-event-compatibility.md`](frontend-event-compatibility.md). Do not use
 private frontend symbols or claim stock state-query/output-path compatibility for
-plugin-owned files.
+plugin-owned files. The Phase 7 bidirectional audit concludes that a generic
+OBS-managed external capture-session API is required before a reconciler can be
+implemented without duplicate stock capture; the required lifecycle and ownership
+boundary are specified in that compatibility document.
