@@ -19,7 +19,8 @@ the focused control/UI-state tests and by manual plugin interaction when desktop
 automation is available.
 
 `research.ps1` refuses to modify a running portable OBS process. It clears
-the runtime's `config` directory and the plugin data directory, then creates one
+the runtime's `config` directory while preserving the deployed plugin data and locale
+files, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
 experiment and is regenerated on every run.
 

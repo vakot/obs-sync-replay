@@ -3,6 +3,7 @@
 #include "control/plugin-capture-runtime.hpp"
 #include "ui/capture-controls-state.hpp"
 #include "ui/obs-controls-adapter.hpp"
+#include "ui/plugin-owned-help-button.hpp"
 
 #include <QtCore/QTimer>
 #include <QtWidgets/QLabel>
@@ -44,10 +45,10 @@ void SetButtonClasses(QPushButton* button, const CaptureControlVisualState state
 
 CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent, ObsControlsAdapter* controls_adapter)
     : QObject(parent), runtime_(runtime), controls_adapter_(controls_adapter) {
-    recording_button_ = new QPushButton(parent);
+    recording_button_ = new PluginOwnedHelpButton(parent);
     recording_button_->setObjectName(QStringLiteral("obsSyncReplayRecordingButton"));
     recording_button_->setProperty("obsSyncReplayPluginControl", true);
-    replay_button_ = new QPushButton(parent);
+    replay_button_ = new PluginOwnedHelpButton(parent);
     replay_button_->setObjectName(QStringLiteral("obsSyncReplayReplayButton"));
     replay_button_->setProperty("obsSyncReplayPluginControl", true);
     save_replay_button_ = new QPushButton(parent);
@@ -176,11 +177,13 @@ void CaptureControls::ApplyPresentation() {
         return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
     };
     recording_button_->setText(to_qstring(presentation.recording.text));
+    recording_button_->SetPluginOwnedHelpTooltip(to_qstring(presentation.recording.plugin_owned_help_tooltip));
     recording_button_->setEnabled(presentation.recording.enabled);
     recording_button_->setVisible(presentation.recording.visible);
     SetButtonClasses(recording_button_, presentation.recording.state);
 
     replay_button_->setText(to_qstring(presentation.replay.text));
+    replay_button_->SetPluginOwnedHelpTooltip(to_qstring(presentation.replay.plugin_owned_help_tooltip));
     replay_button_->setEnabled(presentation.replay.enabled);
     replay_button_->setVisible(presentation.replay.visible);
     SetButtonClasses(replay_button_, presentation.replay.state);

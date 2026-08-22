@@ -21,6 +21,8 @@ struct CaptureControlsLabels final {
     std::string recording_unavailable;
     std::string replay_buffer_unavailable;
     std::string action_unavailable;
+    std::string recording_tooltip;
+    std::string replay_tooltip;
 };
 
 using CaptureControlsLocaleLookup = std::function<const char *(const char *)>;
@@ -64,6 +66,12 @@ inline CaptureControlsLabels ResolveCaptureControlsLabels(const CaptureControlsL
     labels.replay_buffer_unavailable =
         plugin("UI.Capture.ReplayBufferUnavailable", "Replay buffer unavailable");
     labels.action_unavailable = action_unavailable;
+    labels.recording_tooltip = plugin(
+        "Controls.PluginOwned.RecordingTooltip",
+        "Recording is handled by OBS Sync Replay plugin");
+    labels.replay_tooltip = plugin(
+        "Controls.PluginOwned.ReplayTooltip",
+        "Replay Buffer is handled by OBS Sync Replay plugin");
     return labels;
 }
 

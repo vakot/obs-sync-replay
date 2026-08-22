@@ -21,13 +21,8 @@ if (Test-Path -LiteralPath $configDirectory) {
   Write-Host "Clean runtime config was already absent: $configDirectory"
 }
 
-$pluginStateDirectory = Join-Path $portableRoot 'data\obs-plugins\obs-sync-replay'
-if (Test-Path -LiteralPath $pluginStateDirectory) {
-  Remove-Item -LiteralPath $pluginStateDirectory -Recurse -Force
-  Write-Host "Removed plugin-specific runtime state: $pluginStateDirectory"
-} else {
-  Write-Host "Plugin-specific runtime state was already absent: $pluginStateDirectory"
-}
+$pluginDataDirectory = Join-Path $portableRoot 'data\obs-plugins\obs-sync-replay'
+Write-Host "Preserved deployed plugin data and locale files: $pluginDataDirectory"
 
 $profileName = 'Sync Replay Research'
 $profileDirectory = Join-Path $portableRoot "config\obs-studio\basic\profiles\$profileName"

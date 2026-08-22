@@ -277,6 +277,12 @@ leave Recording running; a later enable must expose controls without auto-starti
 The profile-key and transition contract is in
 [`replay-configuration.md`](replay-configuration.md).
 
+The Recording and Replay toggle controls also expose plugin-owned help indicators
+inside the main buttons. Verify their localized tooltips in idle and active/blue
+states, verify that the indicator hit area does not invoke the toggle action, and
+verify that Save Replay remains a compact icon-only control without that indicator.
+Repeat at 175% Windows scaling and confirm there is no clipping or overlap.
+
 On shutdown, plugin controls are disabled before both consumers are stopped, replay
 saves are joined, encoders reach zero, hotkeys are unregistered, and the native
 widgets are restored before plugin controls are released. A manual acceptance run

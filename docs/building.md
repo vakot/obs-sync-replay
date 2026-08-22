@@ -129,7 +129,8 @@ the plugin, use the research script:
 ```
 
 The launcher refuses to reset a running portable OBS process, removes only the
-configured runtime's `config` directory and this plugin's data directory, then creates
+configured runtime's `config` directory while preserving this plugin's deployed static
+data and locale files, then creates
 the minimum profile file needed before OBS initializes video. It starts stock OBS
 with `--portable --multi --profile "Sync Replay Research"`. It does not create a
 scene collection, recording output, replay-buffer setting, encoder setting, or test
