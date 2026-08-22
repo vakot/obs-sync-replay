@@ -13,6 +13,7 @@
 namespace obs_sync_replay {
 
 using CaptureStreamId = uint8_t;
+using AudioTrackId = uint8_t;
 
 struct CapturedEncodedPacket final {
     CaptureStreamId stream_id = 0;
@@ -39,6 +40,8 @@ struct ReplaySnapshot final {
     std::vector<std::string> stream_names;
     std::vector<PacketStreamConfig> stream_configs;
     std::vector<std::vector<OwnedCapturedEncodedPacket>> packets;
+    std::vector<AudioStreamConfig> audio_streams;
+    std::vector<std::vector<OwnedCapturedEncodedPacket>> audio_packets;
 };
 
 struct ReplaySnapshotAttempt final {
@@ -69,11 +72,13 @@ class SynchronizedCaptureSession final {
     SynchronizedCaptureSession& operator=(const SynchronizedCaptureSession&) = delete;
 
     bool RegisterStream(CaptureStreamId stream_id, std::string name, PacketStreamConfig config);
+    bool RegisterAudioTrack(AudioTrackId track_id, AudioStreamConfig config);
     bool Subscribe(CapturePacketConsumer* consumer);
     bool Unsubscribe(CapturePacketConsumer* consumer);
 
     bool Start();
     bool Ingest(CaptureStreamId stream_id, EncodedPacket packet, std::vector<uint8_t> codec_extra_data = {});
+    bool IngestAudio(AudioTrackId track_id, EncodedPacket packet, std::vector<uint8_t> codec_extra_data = {});
     void SetRingCapacityBytes(size_t capacity_bytes) noexcept;
     void SetReplayRetentionEnabled(bool enabled) noexcept;
     void Stop() noexcept;

@@ -8,6 +8,11 @@
 
 namespace obs_sync_replay {
 
+enum class EncodedPacketKind : uint8_t {
+    Video,
+    Audio,
+};
+
 struct EncodedPacket final {
     uint64_t source_cts = 0;
     int64_t pts = 0;
@@ -16,6 +21,11 @@ struct EncodedPacket final {
     int32_t timebase_den = 0;
     bool keyframe = false;
     std::vector<uint8_t> payload;
+    // Audio packets are shared across all video outputs. The index is the
+    // enabled OBS recording-track position, not a scene/output identity.
+    EncodedPacketKind kind = EncodedPacketKind::Video;
+    uint8_t audio_track_index = 0;
+    uint64_t duration_cts = 0;
 };
 
 enum class EncodedPacketBufferResult : uint8_t {

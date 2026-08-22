@@ -1,0 +1,441 @@
+# Phase 8 audio research
+
+## Current continuation decision: shared global OBS tracks
+
+The original isolated-scene requirement and its stock-OBS blocker are preserved
+below as historical research. The approved Phase 8 MVP product decision is
+different: do not add an OBS patch and do not build a plugin-side scene mixer.
+Every output uses the same OBS global/Program audio tracks. Per-scene audio
+is therefore intentionally not isolated in this MVP.
+
+This decision passes the continuation implementation gate because the required
+MVP semantics are the stock global mixer semantics, which are available through
+public OBS APIs.
+
+### A. PROVEN FEASIBLE — IMPLEMENT (approved MVP scope)
+
+The shared global-track MVP is proven feasible with stock OBS public APIs. The
+original exact per-scene-isolated requirement remains the separately recorded
+`C. BLOCKED BY STOCK OBS API — STOP` research result below.
+
+### MVP audio contract
+
+- The active OBS Recording profile is the audio configuration source of truth.
+- Enabled recording mixer indices are mapped in OBS's ascending mux-track order.
+- If six tracks are configured, every output contains six audio tracks: Master,
+  every scene, and Replay all expose tracks 1 through 6.
+- A configured track remains present and may be silent; it is never removed
+  because no source currently contributes audio.
+- Track routing, mute/volume, filters, global devices, sample rate, channel
+  layout, and encoder selection follow the one global OBS Program mix. The
+  plugin does not reinterpret them per scene.
+- One audio encoder is created for each configured global mixer track,
+  independently of the number of video scenes. Its encoded packets are shared
+  with Recording and Replay; Save Replay writes those packets without audio
+  re-encoding.
+
+The implemented topology is:
+
+```text
+OBS global Program mixer track 1..N
+                |
+      one OBS audio encoder per track
+                |
+       shared encoded packet fan-out
+          /                    \
+  Recording MKV           Replay ring -> Save Replay MKV
+```
+
+The common video frame CTS remains the interval authority. Audio packets retain
+their OBS timestamps and audio timebase; consumers map them into that common
+interval and the packet-only MKV writer creates the configured video plus
+audio stream structure for each output.
+
+### Profile configuration boundary
+
+The runtime reads the same profile keys used by stock OBS Recording:
+
+- Simple mode reads `SimpleOutput/RecTracks`, `RecAudioEncoder`, and
+  `ABitrate`.
+- Advanced mode reads `AdvOut/RecTracks`, falls back to `TrackIndex` when the
+  mask is zero, selects `RecAudioEncoder` or the configured stream encoder when
+  it is `none`, and reads `Track1Bitrate` through `Track6Bitrate`.
+- Enabled mixer indices are emitted in ascending order. A configured track is
+  represented in every `PacketStreamConfig` even when its packet history is
+  empty, preserving silent-track presence.
+- OBS's special single-track Stream/FLV cases remain single-track cases; normal
+  MKV Recording uses the enabled multi-track mask.
+
+Exact idle-time encoder JSON settings are not available through the frontend
+profile boundary in all modes. The implementation applies the profile bitrate
+and encoder defaults deterministically; runtime encoder extradata is taken from
+the created OBS encoder before muxing when it becomes available.
+
+### Encoder selection resolution
+
+OBS 32.2.1 stores Simple-output recording selections as codec aliases. The
+default `SimpleOutput/RecAudioEncoder` is `aac`, while `opus` is another
+supported alias. Stock Simple output resolves those aliases through
+`frontend/utility/audio-encoders.cpp` (`GetSimpleAACEncoderForBitrate` and
+`GetSimpleOpusEncoderForBitrate`) before calling `obs_audio_encoder_create()`.
+The fallback AAC/Opus implementations are `ffmpeg_aac` and `ffmpeg_opus`;
+platform encoders such as `CoreAudio_AAC` or `libfdk_aac` may override the
+fallback when registered and suitable for the selected bitrate.
+
+Advanced output normally stores the native ID directly in
+`AdvOut/RecAudioEncoder`. If it is `none`, stock Advanced output falls back to
+the stream encoder in `AdvOut/AudioEncoder`. The adapter preserves a registered
+native ID and otherwise resolves the configured codec alias against the live
+public encoder registry (`obs_enum_encoder_types`, filtered to
+`OBS_ENCODER_AUDIO`, and `obs_get_encoder_codec`). Its AAC preference order is
+`CoreAudio_AAC`, `libfdk_aac`, then `ffmpeg_aac`; Opus prefers `ffmpeg_opus`
+before the first registered Opus encoder. This keeps the alias mapping isolated
+from capture and avoids assuming that `aac` is itself a libobs encoder ID.
+
+Each resolved encoder is logged as
+`[obs-sync-replay] audio: encoder-resolve configured=... resolved=... mixer=...`.
+An unavailable alias or native ID invalidates the configuration before any
+capture resource is created. Enabled mixer indices remain ascending OBS
+indices; their sequential registration order is the output/mux track order.
+One encoder is created per configured track, regardless of scene count.
+
+### Encoded packet output contract
+
+OBS 32.2.1's stock `null_output` is an encoded AV output. Its public startup
+contract therefore rejects a video-only or audio-only attachment, and its
+encoded packet timing callbacks are supplied by the AV interleaver. The plugin
+registers one small output adapter through public `obs_register_output()` with
+the same encoded multi-track AV contract and no file/network side effect.
+
+The shared output carries the Master video encoder plus every configured audio
+encoder. Each scene output carries its scene video encoder and references the
+same configured audio encoders only to satisfy the OBS AV interleaver; its
+packet callback accepts video packets, while the shared audio callbacks accept
+audio packets. No audio encoder is duplicated per scene, and the packet writer
+receives the same encoded audio packet objects for Recording and Replay.
+
+The Master callback and shared audio callbacks are attached to one output and
+start/stop as one transaction. Scene video encoders remain members of the same
+encoder group and use the same Master frame coordinator. This keeps the
+`encoder_packet_time` source CTS available for both media kinds without
+reconstructing it from wall-clock time or a video-only default callback.
+
+### Lifecycle and synchronization boundary
+
+The shared audio encoder set is created once for the capture epoch, starts when
+the first Recording or Replay consumer needs capture, remains active while
+either consumer remains active, and is released only after both consumers are
+off. Scene discovery does not change its topology. Audio packet callbacks are
+short-lived ingestion calls; the capture session owns retained packet lifetime,
+while Recording and Replay own their asynchronous queues/snapshots.
+
+The current implementation does not claim isolated scene audio. That remains a
+future API requirement, not an implicit product policy or a workaround.
+
+### Portable runtime validation
+
+On the pinned portable OBS 32.2.1 profile, Simple Recording configured
+`RecAudioEncoder=aac` and one recording track. The live registry contained
+`ffmpeg_aac`, so the final mapping was `aac -> ffmpeg_aac`, mixer 0, output
+track 1. Recording started and stopped successfully with the real profile;
+the first Master and both scene packets reported the same source CTS
+(`122221178864078`). The run finalized with 2,190 common packets and produced
+three MKV files. `ffprobe` reported one H.264 video stream and one AAC audio
+stream in each file at 48 kHz stereo. Replay was disabled in that unchanged
+profile, so no Replay/Save Replay run was performed.
+
+## Required conclusion
+
+### C. BLOCKED BY STOCK OBS API — STOP
+
+Production audio implementation was intentionally not started. The pinned OBS
+Studio 32.2.1 public APIs can provide the normal Program mix and can register a
+custom audio source, but they do not provide an independently isolated,
+scene-exact audio graph for the required Master + every-scene topology.
+
+The blocker is not audio encoding or packet transport. It is preserving OBS
+scene semantics when the same source is present in more than one audio tree,
+including the Master tree and an inactive scene stream.
+
+## Required product audio topology
+
+The audio requirement is a configured multi-track topology, not one mixed
+stereo track.
+
+### Master output
+
+Master must follow normal OBS Recording audio semantics as closely as possible.
+The active OBS Recording configuration is the source of truth for:
+
+- configured track count and ordering;
+- enabled tracks and routing;
+- sample format and sample rate; and
+- audio encoder behavior.
+
+If OBS Recording is configured with six audio tracks, the Master file must
+contain tracks 1 through 6. A configured track may be silent, but it must not
+be removed merely because no source currently contributes audio.
+
+### Individual scene outputs
+
+Every separately captured scene file must expose the same configured audio-track
+structure as Master. For example, with six configured tracks:
+
+```text
+Master.mkv   -> tracks 1..6
+Gameplay.mkv -> tracks 1..6
+Camera.mkv   -> tracks 1..6
+```
+
+For each scene and each configured track, the encoded audio must contain only
+the audio belonging to that scene under equivalent OBS routing and mixing
+semantics. A track may be present and silent. The result must not collapse the
+configured structure into one mixed stereo track.
+
+The target topology is therefore:
+
+```text
+Master audio mix       -> configured tracks 1..N
+Scene A audio mix      -> configured tracks 1..N
+Scene B audio mix      -> configured tracks 1..N
+...                    -> configured tracks 1..N
+                              |
+                              v
+                     OBS/native audio encoding
+                              |
+                              v
+             encoded audio packets with source timestamps
+                              |
+                 shared Recording + Replay consumers
+```
+
+Recording and Replay must reuse the resulting encoded audio streams. Save
+Replay must not decode and re-encode audio.
+
+## Evidence reviewed
+
+The repository pins OBS Studio 32.2.1 at
+`.deps/sources/obs-studio-32.2.1`. The relevant public headers and source are:
+
+- `libobs/obs.h`: `obs_get_audio`, raw-audio callbacks,
+  `obs_source_get_audio_mix`, `obs_source_add_audio_capture_callback`,
+  `obs_encoder_set_audio`, and `obs_output_set_audio_encoder`;
+- `libobs/obs-source.h`: the public `obs_source_info.audio_render` callback
+  for custom composite sources;
+- `libobs/media-io/audio-io.h`: six `MAX_AUDIO_MIXES` slots;
+- `libobs/obs-audio.c`: the global audio render graph and mixer output;
+- `libobs/obs-scene.c`: the stock scene audio renderer;
+- `libobs/obs-source.c`: source audio buffering, source callbacks, and the
+  non-exported `obs_source_audio_render` implementation; and
+- `libobs/obs-output.c` and `libobs/obs-encoder.c`: output/encoder attachment
+  and audio mixer selection.
+
+The corresponding upstream references are the [32.2.1 audio core source](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-audio.c),
+[32.2.1 scene source](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-scene.c),
+[32.2.1 source implementation](https://github.com/obsproject/obs-studio/blob/32.2.1/libobs/obs-source.c),
+[source API reference](https://docs.obsproject.com/reference-sources),
+[media I/O reference](https://docs.obsproject.com/reference-libobs-media-io), and
+[output API reference](https://docs.obsproject.com/reference-outputs).
+
+## Master Program audio
+
+This part is feasible with public APIs, including the required multi-track
+shape:
+
+1. `obs_get_audio()` returns the one global OBS `audio_t`.
+2. OBS builds that audio output from active canvas channels and global audio
+   sources.
+3. OBS exposes up to six mixer slots, and stock outputs select the configured
+   mixer mask and attach one audio encoder per selected track.
+4. A stock encoded output or audio encoder can bind to that `audio_t` and a
+   selected mixer index.
+5. Program transitions are represented by transition sources and their public
+   transition audio rendering path, so the normal Program mix remains under
+   OBS's own authority.
+
+The Master path can therefore preserve the configured track ordering, enabled
+track set, sample format/rate, encoder settings, and silent configured tracks.
+It does not produce a second independent scene mix.
+
+## Per-scene audio findings
+
+### Public source callbacks are not scene-mix callbacks
+
+`obs_source_add_audio_capture_callback` captures raw audio as a source submits
+audio through `obs_source_output_audio`. It is useful for individual input
+sources, but it is not a callback for the finished audio of a scene. The stock
+scene source uses its internal `audio_render` callback to read child source
+buffers, apply scene-item visibility and volume, account for show/hide
+transitions, and write the scene mix.
+
+The public `obs_source_info.audio_render` member allows a plugin to implement a
+custom composite source. However, the core function that invokes a source's
+audio renderer, `obs_source_audio_render`, is not exported through the public
+API. More importantly, invoking only the scene renderer would not populate the
+inactive child-source buffers or reproduce the global audio graph's activation
+and buffering decisions. A plugin therefore cannot ask stock OBS to render an
+arbitrary inactive scene into an independent six-track `audio_t` using the
+public API.
+
+### `obs_source_get_audio_mix` is not an inactive-scene renderer
+
+`obs_source_get_audio_mix` is public, but it copies the source's already
+rendered per-mixer buffers. It does not create a render context, activate an
+inactive scene, traverse its children, or provide a new scene-specific audio
+graph. The six mixer slots are track-shaped outputs of the one global graph,
+not six independent scene graphs.
+
+### Mixer slots do not create independent scene graphs
+
+OBS exposes mixer masks and raw callbacks. These are useful for selecting
+tracks from the one global audio graph, but they do not create separate source
+activation or duplication semantics.
+
+The stock audio graph enumerates active trees from every audio-enabled canvas
+channel and then enumerates global audio sources. When an individual audio
+source occurs more than once in those trees, OBS marks it as duplicated and
+adds it as a root node. Root nodes are mixed directly into the requested mixer
+outputs rather than once per scene renderer. Consequently, a source that is
+present in the Master tree and in one scene wrapper cannot be confined to that
+scene's mixer slots by the public mixer-mask APIs.
+
+This is a concrete failure case for the required topology:
+
+```text
+Master scene contains Mic
+Scene A contains Mic
+Scene B does not contain Mic
+
+Required:
+  Master = Mic on the configured tracks
+  A      = Mic on the configured tracks
+  B      = silence on those tracks
+
+Stock duplicated-source root behavior:
+  Mic is rendered as a root contribution to enabled mixer slots,
+  so a mixer-based wrapper cannot prove B is silent.
+```
+
+The same issue applies to shared sources, nested scenes, and sources that
+appear through more than one active path. Copying or replacing those sources
+would change their stateful ownership and is not equivalent to OBS's shared
+source semantics.
+
+### Inactive scenes and global devices
+
+The stock audio graph renders scene children through active source trees. There
+is no public audio equivalent of creating a video view that independently
+renders an inactive scene. A plugin can activate a scene through a custom
+composite source, but doing so places that scene in the same global audio graph
+and therefore does not remove the duplicated-source limitation above.
+
+Desktop Audio, Mic/Aux, monitoring deduplication, source mute/volume, sync
+offset, filters, and mixer-track selection are source/global audio semantics.
+The public API has no scene association for those global sources. Assigning
+them to every scene, to Master only, or to a selected scene set would be a
+product policy rather than a consequence of OBS Program semantics. The Phase 8
+gate forbids choosing that policy implicitly.
+
+## Exact missing capability
+
+The missing capability is not another packet callback or another mixer mask. A
+usable OBS API must expose an OBS-owned scene audio render boundary with all of
+these properties:
+
+1. Given a scene source and an audio interval, render that scene as a complete
+   scene audio graph even when it is not the active canvas scene.
+2. Preserve stock scene-item visibility, show/hide transitions, volume, mute,
+   filters, sync offsets, nested scenes, and shared-source behavior.
+3. Apply the same global-source and source-activation semantics that OBS uses
+   for the corresponding Program graph, without making a plugin invent a
+   scene-routing policy.
+4. Return all requested mixer slots with their OBS timestamps, including
+   zero-filled slots for configured tracks with no current contribution.
+5. Avoid mutating the live canvas, double-registering a source as a global root,
+   or changing source ownership and lifecycle behavior.
+6. Define the owning OBS/audio thread, buffering lifetime, reentrancy rules,
+   sample format/rate, and failure behavior well enough for one audio interval
+   to map to the existing common video timeline.
+
+An API that merely exports `obs_source_audio_render`, exposes another copy of
+`obs_source_get_audio_mix`, or exposes raw source callbacks would not satisfy
+this contract.
+
+## Architecture direction evaluation
+
+| Direction | Finding | Gate result |
+| --- | --- | --- |
+| A. Existing public libobs API previously missed | No. `obs_get_audio`, `obs_source_get_audio_mix`, mixer masks, source callbacks, and transition helpers expose or select existing buffers; none renders an inactive scene graph with stock semantics. | Does not solve the blocker. |
+| B. Exact plugin-side mixer from public source APIs | Not proven and not safely implementable. It would have to duplicate OBS activation, buffering, filters, nested/shared-source traversal, global devices, transitions, mute/volume, sync offsets, and six-track routing. Source callbacks provide inputs, not the completed scene mix. | Reject for production; approximation is not allowed. |
+| C. Small generic OBS API extension | Most promising. Add an OBS-owned scene-audio render/mix boundary with the exact contract above, returning the configured mixer slots and timestamps without requiring a plugin to reimplement libobs audio. | Requires an OBS API change; production remains blocked under the stock-public-API gate. |
+| D. Deeper custom mixer | This would duplicate too much OBS audio logic and create a second semantic authority for the product's most synchronization-sensitive media path. | Reject; it is not an acceptable workaround. |
+
+Direction C is the next research target, not an implementation approval. It
+must first be specified and validated against the stock scene renderer for
+shared sources, nested scenes, global devices, filters, transitions, inactive
+activation, all six mixer slots, and source lifecycle/threading behavior.
+
+## Timestamp and encoded packet reuse
+
+The packet portion is feasible independently of the topology blocker:
+
+- `audio_data.timestamp` is an OBS nanosecond timestamp and audio frames have
+  a sample-rate-derived duration;
+- audio encoders use the selected mixer and the audio sample-rate time base;
+- encoded output packet callbacks receive compressed audio and video packets,
+  including packet PTS/DTS and timebase information; and
+- Recording and Replay could retain those encoded packets in one capture
+  session and hand references or copies to both consumers, avoiding
+  re-encoding on Save Replay.
+
+This still requires implementation-level validation for encoder delay, packet
+boundaries, the selected common video interval, configured silent tracks, and
+MKV mux start/end rules. Those are not the reason for the stop; they cannot
+compensate for an incorrect per-scene audio mix.
+
+## Synchronization consequence
+
+The existing video design has one Master frame authority and a shared video
+timeline. A stock Program audio encoder can share the same OBS media-time
+domain, and packet PTS can be mapped to nanoseconds. That is insufficient for
+the Phase 8 requirement because scene audio packets would not be known to
+represent the correct six-track scene mix.
+
+Introducing an unproven mixer would violate the synchronization rule that
+missing or incorrect work must not be concealed by later timing repair. No
+production per-scene-isolated audio path or runtime workaround was added for
+the original blocked requirement. The approved shared global-track MVP does
+have a production encoder, packet, and mux path, and its encoder preparation is
+transactional: all resolved tracks must be available before video resources or
+capture activation are committed.
+
+## Next research direction
+
+The next most promising direction is a small generic OBS/libobs extension
+(Direction C) that exposes an OBS-owned, inactive-scene audio render boundary.
+The extension must return the complete configured mixer-slot array and
+timestamps while preserving stock activation and routing semantics. The
+plugin-side design can then mirror the proven video topology:
+
+```text
+OBS Master scene-audio render  -> configured audio encoders
+OBS Scene A scene-audio render -> configured audio encoders
+OBS Scene B scene-audio render -> configured audio encoders
+                                  |
+                       one encoded-packet fan-out
+                                  |
+                          Recording + Replay
+```
+
+Only after that API is available and the comparison tests prove exact behavior
+for the cases above may audio implementation begin. Until then, production
+audio must remain stopped.
+
+## Continuation implementation status
+
+The preceding sections retain the original isolated-scene research conclusion
+and are not a claim that the MVP has isolated scene audio. For the approved MVP,
+the implementation gate is satisfied by the public global Program mix
+architecture documented at the start of this report. The implementation is
+limited to that shared global-track contract; no custom mixer, OBS patch, or
+private frontend/libobs dependency is used.

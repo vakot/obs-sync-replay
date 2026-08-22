@@ -25,7 +25,9 @@ SynchronizedRecordingConsumer::SynchronizedRecordingConsumer(std::vector<PacketS
                                                              std::vector<CaptureStreamId> stream_ids)
     : stream_configs_(std::move(stream_configs)), paths_(std::move(paths)), stream_ids_(std::move(stream_ids)),
       pending_(stream_configs_.size()),
-      writers_(stream_configs_.size()), dts_origins_(stream_configs_.size(), 0) {}
+      pending_audio_(stream_configs_.empty() ? 0 : stream_configs_.front().audio_streams.size()),
+      writers_(stream_configs_.size()), dts_origins_(stream_configs_.size(), 0),
+      audio_dts_origins_(pending_audio_.size(), 0) {}
 
 SynchronizedRecordingConsumer::~SynchronizedRecordingConsumer() {
     Stop();
@@ -47,11 +49,15 @@ bool SynchronizedRecordingConsumer::Start() {
     for (auto& stream : pending_) {
         stream.clear();
     }
+    for (auto& track : pending_audio_) {
+        track.clear();
+    }
     for (auto& writer : writers_) {
         writer.reset();
     }
     range_ = {};
     std::fill(dts_origins_.begin(), dts_origins_.end(), 0);
+    std::fill(audio_dts_origins_.begin(), audio_dts_origins_.end(), 0);
     running_ = true;
     stop_requested_ = false;
     failed_ = false;
@@ -70,7 +76,9 @@ void SynchronizedRecordingConsumer::OnPacket(OwnedCapturedEncodedPacket packet) 
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         const auto local_index = LocalStreamIndex(packet->stream_id);
-        if (!running_ || stop_requested_ || failed_ || !local_index) {
+        const bool valid_audio = packet->packet.kind == EncodedPacketKind::Audio &&
+                                 packet->packet.audio_track_index < pending_audio_.size();
+        if (!running_ || stop_requested_ || failed_ || (!local_index && !valid_audio)) {
             return;
         }
         if (queue_.size() >= kMaxQueuePackets) {
@@ -121,7 +129,19 @@ void SynchronizedRecordingConsumer::Run() {
         }
 
         const auto local_index = packet ? LocalStreamIndex(packet->stream_id) : std::nullopt;
-        if (packet && local_index) {
+        if (packet && packet->packet.kind == EncodedPacketKind::Audio &&
+            packet->packet.audio_track_index < pending_audio_.size()) {
+            auto& track = pending_audio_[packet->packet.audio_track_index];
+            if (track.find(packet->packet.source_cts) == track.end()) {
+                if (stream_configs_.front().audio_streams[packet->packet.audio_track_index].extra_data.empty() &&
+                    !packet->codec_extra_data.empty()) {
+                    for (PacketStreamConfig& config : stream_configs_) {
+                        config.audio_streams[packet->packet.audio_track_index].extra_data = packet->codec_extra_data;
+                    }
+                }
+                track.emplace(packet->packet.source_cts, std::move(packet));
+            }
+        } else if (packet && local_index) {
             auto& stream = pending_[*local_index];
             if (stream.find(packet->packet.source_cts) == stream.end()) {
                 if (stream_configs_[*local_index].extra_data.empty() && !packet->codec_extra_data.empty()) {
@@ -133,6 +153,9 @@ void SynchronizedRecordingConsumer::Run() {
         size_t pending_packet_count = 0;
         for (const auto& stream : pending_) {
             pending_packet_count += stream.size();
+        }
+        for (const auto& track : pending_audio_) {
+            pending_packet_count += track.size();
         }
         if (pending_packet_count > kMaxQueuePackets) {
             Fail("recording-pending-overflow");
@@ -199,6 +222,12 @@ bool SynchronizedRecordingConsumer::EstablishCommonStart() {
             }
             dts_origins_[index] = first->second->packet.dts;
         }
+        for (size_t track = 0; track < pending_audio_.size(); ++track) {
+            const auto first_audio = pending_audio_[track].lower_bound(cts);
+            if (first_audio != pending_audio_[track].end()) {
+                audio_dts_origins_[track] = first_audio->second->packet.dts;
+            }
+        }
         started_ = true;
         return true;
     }
@@ -230,6 +259,24 @@ bool SynchronizedRecordingConsumer::FlushCommonPrefix() {
                 return false;
             }
             pending_[index].erase(cts);
+        }
+        for (size_t track = 0; track < pending_audio_.size(); ++track) {
+            auto& audio = pending_audio_[track];
+            while (!audio.empty() && audio.begin()->first <= cts) {
+                const auto packet = audio.begin()->second;
+                for (size_t index = 0; index < writers_.size(); ++index) {
+                    EncodedPacket output = packet->packet;
+                    output.pts = av_rescale_q(static_cast<int64_t>(output.source_cts - range_.start_cts),
+                                              AVRational{1, 1'000'000'000},
+                                              AVRational{output.timebase_num, output.timebase_den});
+                    output.dts -= audio_dts_origins_[track];
+                    if (!writers_[index]->Write(output)) {
+                        Fail("recording-audio-write-failed:" + writers_[index]->error());
+                        return false;
+                    }
+                }
+                audio.erase(audio.begin());
+            }
         }
         range_.end_cts = cts;
         ++packet_count_;

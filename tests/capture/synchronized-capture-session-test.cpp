@@ -36,7 +36,23 @@ PacketStreamConfig StreamConfig() {
     config.timebase_num = 1;
     config.timebase_den = 60000;
     config.extra_data = {0x01, 0x64, 0x00, 0x1f};
+    for (size_t track = 0; track < 6; ++track) {
+        config.audio_streams.push_back(
+            AudioStreamConfig{track, "ffmpeg_aac", 48'000, 2, 160, {}});
+    }
     return config;
+}
+
+EncodedPacket AudioPacket(const uint64_t source_cts) {
+    EncodedPacket packet;
+    packet.kind = EncodedPacketKind::Audio;
+    packet.source_cts = source_cts;
+    packet.pts = static_cast<int64_t>(source_cts / 1'000'000'000ULL * 48'000);
+    packet.dts = packet.pts;
+    packet.timebase_num = 1;
+    packet.timebase_den = 48'000;
+    packet.payload = {0x11, 0x22, 0x33};
+    return packet;
 }
 
 class FanoutProbe final : public CapturePacketConsumer {
@@ -55,6 +71,9 @@ std::unique_ptr<SynchronizedCaptureSession> MakeSession(const size_t capacity = 
     Require(session->RegisterStream(0, "master", StreamConfig()), "register master");
     Require(session->RegisterStream(1, "scene_a", StreamConfig()), "register scene A");
     Require(session->RegisterStream(2, "scene_b", StreamConfig()), "register scene B");
+    for (AudioTrackId track = 0; track < 6; ++track) {
+        Require(session->RegisterAudioTrack(track, StreamConfig().audio_streams[track]), "register audio track");
+    }
     Require(session->Start(), "start capture session");
     return session;
 }
@@ -143,6 +162,25 @@ void TestNoCommonKeyframe() {
     Require(!session->SnapshotCommonRange(1), "no common keyframe must reject replay snapshot");
 }
 
+void TestSharedConfiguredAudioTracks() {
+    auto session = MakeSession();
+    IngestAll(*session, 100, true);
+    IngestAll(*session, 110);
+    for (AudioTrackId track = 0; track < 6; ++track) {
+        Require(session->IngestAudio(track, AudioPacket(100)), "ingest audio packet at start");
+        Require(session->IngestAudio(track, AudioPacket(110)), "ingest audio packet at end");
+    }
+    const auto snapshot = session->SnapshotCommonRange(1);
+    Require(snapshot && snapshot->audio_streams.size() == 6 && snapshot->audio_packets.size() == 6,
+            "snapshot must preserve all configured audio tracks");
+    for (size_t track = 0; track < 6; ++track) {
+        Require(snapshot->audio_streams[track].mixer_index == track && snapshot->audio_packets[track].size() == 2,
+                "audio track order and packet history must be shared across outputs");
+    }
+    Require(session->common_watermark_cts() && *session->common_watermark_cts() == 110,
+            "audio progress must not redefine the common video watermark");
+}
+
 } // namespace
 
 int main() {
@@ -152,5 +190,6 @@ int main() {
     TestCapacityUpdateEvictsSharedHistory();
     TestSnapshotOwnershipAndFanout();
     TestNoCommonKeyframe();
+    TestSharedConfiguredAudioTracks();
     return EXIT_SUCCESS;
 }

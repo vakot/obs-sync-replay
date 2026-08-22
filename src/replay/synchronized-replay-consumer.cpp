@@ -21,28 +21,49 @@ uint64_t WallClockNs() {
 }
 
 std::vector<EncodedPacket> MuxPackets(const std::vector<OwnedCapturedEncodedPacket>& owned,
+                                      const std::vector<std::vector<OwnedCapturedEncodedPacket>>& audio_owned,
                                       const ReplayFrameRange range) {
     std::vector<EncodedPacket> packets;
-    packets.reserve(owned.size());
+    size_t audio_count = 0;
+    for (const auto& track : audio_owned) {
+        audio_count += track.size();
+    }
+    packets.reserve(owned.size() + audio_count);
     for (const OwnedCapturedEncodedPacket& packet : owned) {
         if (packet) {
             packets.push_back(packet->packet);
         }
     }
-    packets = SortForDecodeOrder(std::move(packets));
-    if (packets.empty() || packets.front().timebase_num <= 0 || packets.front().timebase_den <= 0) {
-        return packets;
+    std::vector<int64_t> audio_dts_origins(audio_owned.size(), 0);
+    std::vector<bool> audio_origin_set(audio_owned.size(), false);
+    for (size_t track = 0; track < audio_owned.size(); ++track) {
+        for (const auto& packet : audio_owned[track]) {
+            if (packet) {
+                packets.push_back(packet->packet);
+                if (!audio_origin_set[track]) {
+                    audio_dts_origins[track] = packet->packet.dts;
+                    audio_origin_set[track] = true;
+                }
+            }
+        }
     }
 
     const AVRational source_timebase{1, 1'000'000'000};
-    const AVRational packet_timebase{packets.front().timebase_num, packets.front().timebase_den};
-    const int64_t dts_origin = packets.front().dts;
     for (EncodedPacket& packet : packets) {
+        if (packet.timebase_num <= 0 || packet.timebase_den <= 0) {
+            continue;
+        }
+        const AVRational packet_timebase{packet.timebase_num, packet.timebase_den};
         packet.pts = av_rescale_q(static_cast<int64_t>(packet.source_cts - range.start_cts), source_timebase,
                                   packet_timebase);
-        packet.dts -= dts_origin;
+        if (packet.kind == EncodedPacketKind::Audio && packet.audio_track_index < audio_dts_origins.size() &&
+            audio_origin_set[packet.audio_track_index]) {
+            packet.dts -= audio_dts_origins[packet.audio_track_index];
+        } else if (packet.kind == EncodedPacketKind::Video && !owned.empty() && owned.front()) {
+            packet.dts -= owned.front()->packet.dts;
+        }
     }
-    return packets;
+    return SortForDecodeOrder(std::move(packets));
 }
 
 } // namespace
@@ -141,6 +162,13 @@ ReplaySaveResult SynchronizedReplayConsumer::WriteSnapshot(ReplaySnapshot snapsh
         result.error = "snapshot-stream-count-mismatch";
         return result;
     }
+    for (const auto& track : snapshot.audio_packets) {
+        for (const auto& packet : track) {
+            if (packet) {
+                result.snapshot_payload_bytes += packet->packet.payload.size();
+            }
+        }
+    }
 
     for (size_t index = 0; index < snapshot.packets.size(); ++index) {
         for (const auto& packet : snapshot.packets[index]) {
@@ -148,12 +176,14 @@ ReplaySaveResult SynchronizedReplayConsumer::WriteSnapshot(ReplaySnapshot snapsh
                 result.snapshot_payload_bytes += packet->packet.payload.size();
             }
         }
+        snapshot.stream_configs[index].audio_streams = snapshot.audio_streams;
         MkvPacketWriter writer;
         if (!writer.Open(result.paths[index].string(), snapshot.stream_configs[index])) {
             result.error = "stream-open-failed:" + writer.error();
             return result;
         }
-        const std::vector<EncodedPacket> packets = MuxPackets(snapshot.packets[index], snapshot.range);
+        const std::vector<EncodedPacket> packets =
+            MuxPackets(snapshot.packets[index], snapshot.audio_packets, snapshot.range);
         if (packets.empty()) {
             writer.Abort();
             result.error = "empty-snapshot-stream";
