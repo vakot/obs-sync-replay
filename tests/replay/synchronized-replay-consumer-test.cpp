@@ -27,6 +27,10 @@ PacketStreamConfig StreamConfig() {
                          0x2a, 0xda, 0x01, 0xe0, 0x08, 0x9f, 0x97, 0x01, 0x6a, 0x02, 0x02,
                          0x02, 0x80, 0x00, 0x00, 0x03, 0x00, 0x80, 0x00, 0x00, 0x3c, 0x47,
                          0x8c, 0x19, 0x50, 0x01, 0x00, 0x04, 0x68, 0xce, 0x3c, 0x80};
+    for (size_t track = 0; track < 6; ++track) {
+        config.audio_streams.push_back(
+            AudioStreamConfig{track, "ffmpeg_aac", 48'000, 2, 160, {0x12, 0x10}});
+    }
     return config;
 }
 
@@ -39,6 +43,19 @@ EncodedPacket Packet(const uint64_t source_cts, const bool keyframe) {
     packet.timebase_den = 1000;
     packet.keyframe = keyframe;
     packet.payload = {0x00, 0x00, 0x01, static_cast<uint8_t>(keyframe ? 0x65 : 0x41), 0x88, 0x84};
+    return packet;
+}
+
+EncodedPacket AudioPacket(const uint64_t source_cts, const AudioTrackId track) {
+    EncodedPacket packet;
+    packet.kind = EncodedPacketKind::Audio;
+    packet.audio_track_index = track;
+    packet.source_cts = source_cts;
+    packet.pts = static_cast<int64_t>(source_cts / 1'000'000'000ULL * 48'000);
+    packet.dts = packet.pts;
+    packet.timebase_num = 1;
+    packet.timebase_den = 48'000;
+    packet.payload = {0x21, 0x10, 0x56, 0xe5};
     return packet;
 }
 
@@ -64,10 +81,17 @@ int main() {
     Require(capture.RegisterStream(0, "master", StreamConfig()), "register master");
     Require(capture.RegisterStream(1, "scene_a", StreamConfig()), "register scene A");
     Require(capture.RegisterStream(2, "scene_b", StreamConfig()), "register scene B");
+    for (AudioTrackId track = 0; track < 6; ++track) {
+        Require(capture.RegisterAudioTrack(track, StreamConfig().audio_streams[track]), "register audio track");
+    }
     Require(capture.Start(), "start capture");
     for (CaptureStreamId stream = 0; stream < 3; ++stream) {
         Require(capture.Ingest(stream, Packet(1'000'000'000, true)), "ingest common keyframe");
         Require(capture.Ingest(stream, Packet(2'000'000'000, false)), "ingest common packet");
+    }
+    for (AudioTrackId track = 0; track < 6; ++track) {
+        Require(capture.IngestAudio(track, AudioPacket(1'000'000'000, track)), "ingest audio keyframe");
+        Require(capture.IngestAudio(track, AudioPacket(2'000'000'000, track)), "ingest audio packet");
     }
 
     const auto first_paths = Paths("obs-sync-replay-consumer-test-first");

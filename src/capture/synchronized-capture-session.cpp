@@ -4,6 +4,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <iterator>
 #include <utility>
 
 namespace obs_sync_replay {
@@ -18,6 +19,13 @@ struct StreamState final {
     size_t peak_retained_bytes = 0;
     uint64_t max_source_cts = 0;
     bool has_source_cts = false;
+};
+
+struct AudioTrackState final {
+    AudioStreamConfig config;
+    std::map<uint64_t, OwnedCapturedEncodedPacket> packets;
+    size_t retained_bytes = 0;
+    size_t peak_retained_bytes = 0;
 };
 
 size_t PacketBytes(const OwnedCapturedEncodedPacket& packet) {
@@ -36,6 +44,18 @@ void EraseFront(StreamState& stream, uint64_t* evicted_packets) {
     }
 }
 
+void EraseFront(AudioTrackState& track, uint64_t* evicted_packets) {
+    if (track.packets.empty()) {
+        return;
+    }
+    const auto oldest = track.packets.begin();
+    track.retained_bytes -= PacketBytes(oldest->second);
+    track.packets.erase(oldest);
+    if (evicted_packets) {
+        ++*evicted_packets;
+    }
+}
+
 size_t RetainedBytes(const std::vector<StreamState>& streams) {
     size_t total = 0;
     for (const StreamState& stream : streams) {
@@ -44,17 +64,32 @@ size_t RetainedBytes(const std::vector<StreamState>& streams) {
     return total;
 }
 
-void EvictToCapacity(std::vector<StreamState>& streams, const size_t capacity_bytes, uint64_t* evicted_packets) {
+size_t RetainedBytes(const std::vector<AudioTrackState>& tracks) {
+    size_t total = 0;
+    for (const AudioTrackState& track : tracks) {
+        total += track.retained_bytes;
+    }
+    return total;
+}
+
+void EvictToCapacity(std::vector<StreamState>& streams, std::vector<AudioTrackState>& audio_tracks,
+                     const size_t capacity_bytes, uint64_t* evicted_packets) {
     // OBS's replay_buffer output applies max_size_mb to one shared packet
     // queue. Keep the plugin's equivalent budget shared across all streams and
     // evict a common temporal prefix so a later stream never shifts into an
     // earlier stream's missing slot.
-    while (RetainedBytes(streams) > capacity_bytes) {
+    while (RetainedBytes(streams) + RetainedBytes(audio_tracks) > capacity_bytes) {
         std::optional<uint64_t> oldest_cts;
         for (const StreamState& stream : streams) {
             if (!stream.packets.empty()) {
                 oldest_cts = oldest_cts ? std::min(*oldest_cts, stream.packets.begin()->first)
                                          : stream.packets.begin()->first;
+            }
+        }
+        for (const AudioTrackState& track : audio_tracks) {
+            if (!track.packets.empty()) {
+                oldest_cts = oldest_cts ? std::min(*oldest_cts, track.packets.begin()->first)
+                                        : track.packets.begin()->first;
             }
         }
         if (!oldest_cts) {
@@ -63,6 +98,11 @@ void EvictToCapacity(std::vector<StreamState>& streams, const size_t capacity_by
         for (StreamState& stream : streams) {
             while (!stream.packets.empty() && stream.packets.begin()->first <= *oldest_cts) {
                 EraseFront(stream, evicted_packets);
+            }
+        }
+        for (AudioTrackState& track : audio_tracks) {
+            while (!track.packets.empty() && track.packets.begin()->first <= *oldest_cts) {
+                EraseFront(track, evicted_packets);
             }
         }
     }
@@ -98,6 +138,7 @@ struct SynchronizedCaptureSession::State final {
 
     SynchronizedCaptureConfig config;
     std::vector<StreamState> streams;
+    std::vector<AudioTrackState> audio_tracks;
     std::vector<CapturePacketConsumer*> consumers;
     bool running = false;
     size_t retained_bytes = 0;
@@ -141,6 +182,16 @@ bool SynchronizedCaptureSession::RegisterStream(const CaptureStreamId stream_id,
     return true;
 }
 
+bool SynchronizedCaptureSession::RegisterAudioTrack(const AudioTrackId track_id, AudioStreamConfig config) {
+    const std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->running || config.sample_rate == 0 || config.channels == 0 ||
+        track_id != state_->audio_tracks.size()) {
+        return false;
+    }
+    state_->audio_tracks.push_back(AudioTrackState{std::move(config)});
+    return true;
+}
+
 bool SynchronizedCaptureSession::Subscribe(CapturePacketConsumer* consumer) {
     const std::lock_guard<std::mutex> lock(state_->mutex);
     if (!consumer || std::find(state_->consumers.begin(), state_->consumers.end(), consumer) != state_->consumers.end()) {
@@ -175,7 +226,8 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
     OwnedCapturedEncodedPacket owned_packet;
     {
         const std::lock_guard<std::mutex> lock(state_->mutex);
-        if (!state_->running || stream_id >= state_->streams.size() || packet.payload.empty() ||
+        if (!state_->running || stream_id >= state_->streams.size() || packet.kind != EncodedPacketKind::Video ||
+            packet.payload.empty() ||
             packet.timebase_num <= 0 || packet.timebase_den <= 0) {
             ++state_->rejected_packet_count;
             return false;
@@ -207,8 +259,9 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
             stream.has_source_cts = true;
             state_->retained_bytes += PacketBytes(owned_packet);
             state_->peak_retained_bytes = std::max(state_->peak_retained_bytes, state_->retained_bytes);
-            EvictToCapacity(state_->streams, state_->config.ring_capacity_bytes, &state_->evicted_packet_count);
-            state_->retained_bytes = RetainedBytes(state_->streams);
+            EvictToCapacity(state_->streams, state_->audio_tracks, state_->config.ring_capacity_bytes,
+                            &state_->evicted_packet_count);
+            state_->retained_bytes = RetainedBytes(state_->streams) + RetainedBytes(state_->audio_tracks);
         }
         consumers = state_->consumers;
     }
@@ -223,14 +276,63 @@ bool SynchronizedCaptureSession::Ingest(const CaptureStreamId stream_id, Encoded
     return true;
 }
 
+bool SynchronizedCaptureSession::IngestAudio(const AudioTrackId track_id, EncodedPacket packet,
+                                             std::vector<uint8_t> codec_extra_data) {
+    std::vector<CapturePacketConsumer*> consumers;
+    OwnedCapturedEncodedPacket owned_packet;
+    {
+        const std::lock_guard<std::mutex> lock(state_->mutex);
+        if (!state_->running || track_id >= state_->audio_tracks.size() || packet.kind != EncodedPacketKind::Audio ||
+            packet.payload.empty() || packet.timebase_num <= 0 || packet.timebase_den <= 0) {
+            ++state_->rejected_packet_count;
+            return false;
+        }
+        AudioTrackState& track = state_->audio_tracks[track_id];
+        if (track.packets.find(packet.source_cts) != track.packets.end()) {
+            ++state_->duplicate_packet_count;
+            return false;
+        }
+        if (!codec_extra_data.empty()) {
+            track.config.extra_data = codec_extra_data;
+            for (StreamState& stream : state_->streams) {
+                if (track_id < stream.config.audio_streams.size()) {
+                    stream.config.audio_streams[track_id].extra_data = codec_extra_data;
+                }
+            }
+        }
+        auto packet_value = std::make_shared<CapturedEncodedPacket>();
+        packet_value->packet = std::move(packet);
+        packet_value->packet.audio_track_index = track_id;
+        packet_value->codec_extra_data = std::move(codec_extra_data);
+        owned_packet = std::move(packet_value);
+        if (state_->replay_retention_enabled) {
+            track.packets.emplace(owned_packet->packet.source_cts, owned_packet);
+            track.retained_bytes += PacketBytes(owned_packet);
+            track.peak_retained_bytes = std::max(track.peak_retained_bytes, track.retained_bytes);
+            state_->retained_bytes += PacketBytes(owned_packet);
+            state_->peak_retained_bytes = std::max(state_->peak_retained_bytes, state_->retained_bytes);
+            EvictToCapacity(state_->streams, state_->audio_tracks, state_->config.ring_capacity_bytes,
+                            &state_->evicted_packet_count);
+            state_->retained_bytes = RetainedBytes(state_->streams) + RetainedBytes(state_->audio_tracks);
+        }
+        consumers = state_->consumers;
+    }
+    for (CapturePacketConsumer* consumer : consumers) {
+        if (consumer) {
+            consumer->OnPacket(owned_packet);
+        }
+    }
+    return true;
+}
+
 void SynchronizedCaptureSession::SetRingCapacityBytes(const size_t capacity_bytes) noexcept {
     const std::lock_guard<std::mutex> lock(state_->mutex);
     state_->config.ring_capacity_bytes = capacity_bytes;
     if (!state_->replay_retention_enabled) {
         return;
     }
-    EvictToCapacity(state_->streams, capacity_bytes, &state_->evicted_packet_count);
-    state_->retained_bytes = RetainedBytes(state_->streams);
+    EvictToCapacity(state_->streams, state_->audio_tracks, capacity_bytes, &state_->evicted_packet_count);
+    state_->retained_bytes = RetainedBytes(state_->streams) + RetainedBytes(state_->audio_tracks);
 }
 
 void SynchronizedCaptureSession::SetReplayRetentionEnabled(const bool enabled) noexcept {
@@ -244,6 +346,10 @@ void SynchronizedCaptureSession::SetReplayRetentionEnabled(const bool enabled) n
         stream.retained_bytes = 0;
         stream.max_source_cts = 0;
         stream.has_source_cts = false;
+    }
+    for (AudioTrackState& track : state_->audio_tracks) {
+        track.packets.clear();
+        track.retained_bytes = 0;
     }
     state_->retained_bytes = 0;
 }
@@ -375,6 +481,26 @@ ReplaySnapshotAttempt SynchronizedCaptureSession::SnapshotCommonRangeDetailed(
         for (auto it = stream.packets.lower_bound(*start_cts);
              it != stream.packets.end() && it->first <= end_cts; ++it) {
             snapshot.packets[index].push_back(it->second);
+        }
+    }
+    snapshot.audio_streams.reserve(state_->audio_tracks.size());
+    snapshot.audio_packets.resize(state_->audio_tracks.size());
+    for (size_t track_index = 0; track_index < state_->audio_tracks.size(); ++track_index) {
+        const AudioTrackState& track = state_->audio_tracks[track_index];
+        snapshot.audio_streams.push_back(track.config);
+        auto it = track.packets.lower_bound(*start_cts);
+        if (it != track.packets.begin()) {
+            const auto previous = std::prev(it);
+            const uint64_t previous_end = previous->second->packet.duration_cts > 0
+                                               ? previous->first + previous->second->packet.duration_cts
+                                               : previous->first;
+            if (previous_end >= *start_cts) {
+                snapshot.audio_packets[track_index].push_back(previous->second);
+            }
+        }
+        for (;
+             it != track.packets.end() && it->first <= end_cts; ++it) {
+            snapshot.audio_packets[track_index].push_back(it->second);
         }
     }
     return {std::move(snapshot), {}};

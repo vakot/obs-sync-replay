@@ -53,12 +53,13 @@ class MkvPacketWriter final {
     std::string path_;
     AVFormatContext* format_ = nullptr;
     AVStream* stream_ = nullptr;
+    std::vector<AVStream*> audio_streams_;
     int32_t timebase_num_ = 0;
     int32_t timebase_den_ = 0;
-    int64_t timestamp_origin_ = 0;
-    bool has_timestamp_origin_ = false;
-    bool has_last_written_dts_ = false;
-    int64_t last_written_dts_ = 0;
+    std::vector<int64_t> timestamp_origins_;
+    std::vector<bool> has_timestamp_origins_;
+    std::vector<int64_t> last_written_dts_;
+    std::vector<bool> has_last_written_dts_;
     bool has_packet_ = false;
     uint64_t first_source_cts_ = 0;
     uint64_t last_source_cts_ = 0;

@@ -31,6 +31,30 @@ std::string AvError(const int error) {
     return buffer;
 }
 
+AVCodecID AudioCodecId(const std::string& encoder_id) {
+    if (encoder_id == "aac" || encoder_id == "ffmpeg_aac") {
+        return AV_CODEC_ID_AAC;
+    }
+    if (encoder_id == "opus" || encoder_id == "ffmpeg_opus") {
+        return AV_CODEC_ID_OPUS;
+    }
+    return AV_CODEC_ID_NONE;
+}
+
+bool SetExtraData(AVCodecParameters* codecpar, const std::vector<uint8_t>& extra_data) {
+    if (extra_data.empty()) {
+        return true;
+    }
+    codecpar->extradata = static_cast<uint8_t*>(
+        av_mallocz(extra_data.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!codecpar->extradata) {
+        return false;
+    }
+    codecpar->extradata_size = static_cast<int>(extra_data.size());
+    std::memcpy(codecpar->extradata, extra_data.data(), extra_data.size());
+    return true;
+}
+
 } // namespace
 
 MkvPacketWriter::~MkvPacketWriter() {
@@ -71,15 +95,41 @@ bool MkvPacketWriter::Open(const std::string& path, const MkvStreamConfig& confi
     stream_->codecpar->width = static_cast<int>(config.width);
     stream_->codecpar->height = static_cast<int>(config.height);
     stream_->codecpar->codec_tag = 0;
-    stream_->codecpar->extradata = static_cast<uint8_t*>(
-        av_mallocz(config.extra_data.size() + AV_INPUT_BUFFER_PADDING_SIZE));
-    if (!stream_->codecpar->extradata) {
+    if (!SetExtraData(stream_->codecpar, config.extra_data)) {
         error_ = "mkv-extradata-allocation-failed";
         ReleaseFormat();
         return false;
     }
-    stream_->codecpar->extradata_size = static_cast<int>(config.extra_data.size());
-    std::memcpy(stream_->codecpar->extradata, config.extra_data.data(), config.extra_data.size());
+    audio_streams_.reserve(config.audio_streams.size());
+    for (const AudioStreamConfig& audio : config.audio_streams) {
+        if (audio.sample_rate == 0 || audio.channels == 0 || AudioCodecId(audio.encoder_id) == AV_CODEC_ID_NONE) {
+            error_ = "invalid-mkv-audio-stream-configuration";
+            ReleaseFormat();
+            return false;
+        }
+        AVStream* audio_stream = avformat_new_stream(format_, nullptr);
+        if (!audio_stream) {
+            error_ = "mkv-audio-stream-failed";
+            ReleaseFormat();
+            return false;
+        }
+        audio_stream->time_base = AVRational{1, static_cast<int>(audio.sample_rate)};
+        audio_stream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        audio_stream->codecpar->codec_id = AudioCodecId(audio.encoder_id);
+        audio_stream->codecpar->sample_rate = static_cast<int>(audio.sample_rate);
+        av_channel_layout_default(&audio_stream->codecpar->ch_layout, static_cast<int>(audio.channels));
+        audio_stream->codecpar->codec_tag = 0;
+        if (!SetExtraData(audio_stream->codecpar, audio.extra_data)) {
+            error_ = "mkv-audio-extradata-allocation-failed";
+            ReleaseFormat();
+            return false;
+        }
+        audio_streams_.push_back(audio_stream);
+    }
+    timestamp_origins_.assign(1 + audio_streams_.size(), 0);
+    has_timestamp_origins_.assign(1 + audio_streams_.size(), false);
+    last_written_dts_.assign(1 + audio_streams_.size(), 0);
+    has_last_written_dts_.assign(1 + audio_streams_.size(), false);
 
     if (!(format_->oformat->flags & AVFMT_NOFILE)) {
         error = avio_open(&format_->pb, path.c_str(), AVIO_FLAG_WRITE);
@@ -103,9 +153,18 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
     if (!format_ || !stream_ || packet.payload.empty() || packet.timebase_num <= 0 || packet.timebase_den <= 0) {
         return Fail("invalid-mkv-packet");
     }
-    if (!has_timestamp_origin_) {
-        timestamp_origin_ = std::min(packet.pts, packet.dts);
-        has_timestamp_origin_ = true;
+    size_t output_index = 0;
+    AVStream* output_stream = stream_;
+    if (packet.kind == EncodedPacketKind::Audio) {
+        if (packet.audio_track_index >= audio_streams_.size()) {
+            return Fail("mkv-audio-track-index-invalid");
+        }
+        output_index = static_cast<size_t>(packet.audio_track_index) + 1;
+        output_stream = audio_streams_[packet.audio_track_index];
+    }
+    if (!has_timestamp_origins_[output_index]) {
+        timestamp_origins_[output_index] = std::min(packet.pts, packet.dts);
+        has_timestamp_origins_[output_index] = true;
     }
     AVPacket* output_packet = av_packet_alloc();
     if (!output_packet || av_new_packet(output_packet, static_cast<int>(packet.payload.size())) < 0) {
@@ -114,17 +173,17 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
     }
     std::memcpy(output_packet->data, packet.payload.data(), packet.payload.size());
     const AVRational source_timebase{packet.timebase_num, packet.timebase_den};
-    const AVRational target_timebase = stream_->time_base;
-    output_packet->pts = av_rescale_q(packet.pts - timestamp_origin_, source_timebase, target_timebase);
-    output_packet->dts = av_rescale_q(packet.dts - timestamp_origin_, source_timebase, target_timebase);
-    if (has_last_written_dts_ && output_packet->dts < last_written_dts_) {
+    const AVRational target_timebase = output_stream->time_base;
+    output_packet->pts = av_rescale_q(packet.pts - timestamp_origins_[output_index], source_timebase, target_timebase);
+    output_packet->dts = av_rescale_q(packet.dts - timestamp_origins_[output_index], source_timebase, target_timebase);
+    if (has_last_written_dts_[output_index] && output_packet->dts < last_written_dts_[output_index]) {
         std::ostringstream reason;
         reason << "packet-dts-order-invalid:source_cts=" << packet.source_cts << ":dts=" << packet.dts
-               << ":muxed_dts=" << output_packet->dts << ":last_muxed_dts=" << last_written_dts_;
+               << ":muxed_dts=" << output_packet->dts << ":last_muxed_dts=" << last_written_dts_[output_index];
         av_packet_free(&output_packet);
         return Fail(reason.str().c_str());
     }
-    output_packet->stream_index = stream_->index;
+    output_packet->stream_index = output_stream->index;
     if (packet.keyframe) {
         output_packet->flags |= AV_PKT_FLAG_KEY;
     }
@@ -135,7 +194,7 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
         std::ostringstream reason;
         reason << "mkv-write-failed:" << AvError(error) << ":source_cts=" << packet.source_cts
                << ":pts=" << packet.pts << ":dts=" << packet.dts << ":last_written_dts_target="
-               << (has_last_written_dts_ ? std::to_string(last_written_dts_) : "none");
+               << (has_last_written_dts_[output_index] ? std::to_string(last_written_dts_[output_index]) : "none");
         return Fail(reason.str().c_str());
     }
 
@@ -146,8 +205,8 @@ bool MkvPacketWriter::Write(const EncodedPacket& packet) {
         first_source_cts_ = std::min(first_source_cts_, packet.source_cts);
     }
     last_source_cts_ = std::max(last_source_cts_, packet.source_cts);
-    last_written_dts_ = muxed_dts;
-    has_last_written_dts_ = true;
+    last_written_dts_[output_index] = muxed_dts;
+    has_last_written_dts_[output_index] = true;
     ++packet_count_;
     bytes_ += packet.payload.size();
     return true;
@@ -209,6 +268,11 @@ void MkvPacketWriter::ReleaseFormat() noexcept {
     avformat_free_context(format_);
     format_ = nullptr;
     stream_ = nullptr;
+    audio_streams_.clear();
+    timestamp_origins_.clear();
+    has_timestamp_origins_.clear();
+    last_written_dts_.clear();
+    has_last_written_dts_.clear();
 }
 
 MkvPacketSink::MkvPacketSink(std::string path) : writer_(), path_(std::move(path)) {}

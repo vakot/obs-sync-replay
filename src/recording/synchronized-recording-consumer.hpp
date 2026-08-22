@@ -59,8 +59,10 @@ class SynchronizedRecordingConsumer final : public CapturePacketConsumer {
     std::condition_variable condition_;
     std::deque<OwnedCapturedEncodedPacket> queue_;
     std::vector<std::map<uint64_t, OwnedCapturedEncodedPacket>> pending_;
+    std::vector<std::map<uint64_t, OwnedCapturedEncodedPacket>> pending_audio_;
     std::vector<std::unique_ptr<MkvPacketWriter>> writers_;
     std::vector<int64_t> dts_origins_;
+    std::vector<int64_t> audio_dts_origins_;
     std::thread worker_;
     bool running_ = false;
     bool stop_requested_ = false;

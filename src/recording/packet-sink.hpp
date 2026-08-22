@@ -4,9 +4,19 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace obs_sync_replay {
+
+struct AudioStreamConfig final {
+    size_t mixer_index = 0;
+    std::string encoder_id;
+    uint32_t sample_rate = 0;
+    uint32_t channels = 0;
+    uint32_t bitrate_kbps = 0;
+    std::vector<uint8_t> extra_data;
+};
 
 struct PacketStreamConfig final {
     uint32_t width = 0;
@@ -18,6 +28,9 @@ struct PacketStreamConfig final {
     // within one committed source-CTS batch.
     size_t muxer_tail_capacity_bytes = 1 * 1024 * 1024;
     uint64_t muxer_reorder_safety_cts = 2'000'000'000;
+    // The same ordered enabled-track list is attached to every video output.
+    // An absent packet does not remove a configured audio stream from the MKV.
+    std::vector<AudioStreamConfig> audio_streams;
 };
 
 class SynchronizedPacketSink {
