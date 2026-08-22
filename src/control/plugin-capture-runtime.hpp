@@ -2,6 +2,7 @@
 
 #include "config/replay-configuration.hpp"
 #include "control/capture-control.hpp"
+#include "topology/scene-topology.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,9 +14,11 @@
 
 namespace obs_sync_replay {
 
+struct DiscoveredObsScene;
+
 class PluginCaptureRuntime final {
 public:
-    PluginCaptureRuntime(std::string scene_a_name, std::string scene_b_name);
+    PluginCaptureRuntime();
     ~PluginCaptureRuntime();
 
     PluginCaptureRuntime(const PluginCaptureRuntime &) = delete;
@@ -31,6 +34,7 @@ public:
     ControlCommandResult StopReplay();
     ControlCommandResult ApplyReplayConfiguration(ReplayConfiguration configuration);
     ControlCommandResult RefreshReplayConfiguration();
+    ControlCommandResult RefreshSceneTopology();
     void PollReplaySave() noexcept;
     void Stop();
 
@@ -47,10 +51,14 @@ private:
 
     std::vector<std::filesystem::path> OutputPaths(CaptureConsumer consumer, const char *stem);
     ControlCommandResult Failed(const char *reason) const;
+    bool BuildControlState();
+    bool InstallSceneTargets(std::vector<struct DiscoveredObsScene> discovered);
+    void ResetSceneTargets() noexcept;
+    void FinishCaptureEpochIfIdle();
+    void LogTopology(const char* event) const;
 
-    std::string scene_a_name_;
-    std::string scene_b_name_;
     ReplayConfiguration replay_configuration_;
+    SceneTopologyModel topology_model_;
     std::unique_ptr<State> state_;
     std::unique_ptr<ControlState> control_state_;
     mutable std::mutex mutex_;

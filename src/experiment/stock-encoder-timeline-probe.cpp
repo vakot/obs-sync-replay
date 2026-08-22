@@ -1,6 +1,7 @@
 #include "experiment/stock-encoder-timeline-probe.hpp"
 
 #include "recording/obs-synchronized-recording.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -132,7 +133,7 @@ uint32_t ReadEnvironmentUint(const char* name, const uint32_t fallback) {
     char* end = nullptr;
     const unsigned long parsed = std::strtoul(value.c_str(), &end, 10);
     if (end == value.c_str() || *end != '\0' || parsed == 0 || parsed > UINT32_MAX) {
-        blog(LOG_WARNING, "[stock-probe] invalid environment value name=%s value=%s fallback=%u", name, value.c_str(),
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "experiment", "invalid environment value name=%s value=%s fallback=%u", name, value.c_str(),
              fallback);
         return fallback;
     }
@@ -172,7 +173,7 @@ void OnOutputPacket(obs_output_t*, struct encoder_packet* packet, struct encoder
     ++capture->packet_count;
     if (!packet || !packet_time) {
         ++capture->missing_packet_time_count;
-        blog(LOG_WARNING, "[stock-probe] packet-observation-missing-timing output=%s packet=%llu",
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "experiment", "packet-observation-missing-timing output=%s packet=%llu",
              capture->output ? capture->output : "unknown",
              static_cast<unsigned long long>(capture->packet_count));
         return;
@@ -198,8 +199,8 @@ void OnOutputPacket(obs_output_t*, struct encoder_packet* packet, struct encoder
 
     const size_t sample_index = capture->packets.size() - 1;
     if (sample_index < 3 || sample_index % 120 == 0) {
-        blog(LOG_INFO,
-             "[stock-probe] packet-sample output=%s packet=%llu local_pts=%lld local_dts=%lld "
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+             "packet-sample output=%s packet=%llu local_pts=%lld local_dts=%lld "
              "packet_cts=%llu encoder_fer=%llu encoder_ferc=%llu encoder_pir=%llu "
              "callback_root_pts=%llu callback_root_frame_count=%u callback_root_lagged_frames=%u keyframe=%s",
              capture->output ? capture->output : "unknown",
@@ -271,7 +272,7 @@ void SwitchCurrentSceneTask(void* param) {
         return;
     }
     obs_frontend_set_current_scene(scene);
-    blog(LOG_INFO, "[stock-probe] program-scene-switch scene=%s plugin_views_unchanged=true",
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment", "program-scene-switch scene=%s plugin_views_unchanged=true",
          obs_source_get_name(scene));
     obs_source_release(scene);
 }
@@ -286,7 +287,7 @@ bool SwitchProgramScene(obs_source_t* scene) {
 }
 
 void LogOutputFailure(const char* stage, const char* output_name, obs_output_t* output) {
-    blog(LOG_ERROR, "[stock-probe] output-failure stage=%s output=%s error=%s", stage,
+    OBS_SYNC_REPLAY_LOG(LOG_ERROR, "experiment", "output-failure stage=%s output=%s error=%s", stage,
          output_name ? output_name : "unknown",
          output ? (obs_output_get_last_error(output) ? obs_output_get_last_error(output) : "none") : "null-output");
 }
@@ -388,8 +389,8 @@ EpochSummary AnalyzeRootEpochs(const char* encoder_id, const RootEpochCapture& e
         }
 
         if (i < 3 || i % 25 == 0) {
-            blog(LOG_INFO,
-                 "[stock-probe] epoch-sample encoder=%s attempt=%u root_epoch_cts=%llu root_frame_count=%u "
+            OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+                 "epoch-sample encoder=%s attempt=%u root_epoch_cts=%llu root_frame_count=%u "
                  "first_packet_cts_a=%llu first_packet_cts_b=%llu first_packet_cts_equal=%s "
                  "first_packet_keyframe_a=%s first_packet_keyframe_b=%s common_keyframe_cts=%llu",
                  encoder_id, i + 1, static_cast<unsigned long long>(epoch.source_cts), epoch.root_frame_count,
@@ -400,8 +401,8 @@ EpochSummary AnalyzeRootEpochs(const char* encoder_id, const RootEpochCapture& e
         }
     }
 
-    blog(LOG_INFO,
-         "[stock-probe] epoch-result encoder=%s attempts=%u usable_attempts=%u first_source_cts_equal=%u "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+         "epoch-result encoder=%s attempts=%u usable_attempts=%u first_source_cts_equal=%u "
          "first_source_cts_exactly_at_epoch=%u common_keyframe_cts=%u "
          "root_epoch_identity=public-obs_add_tick_callback-plus-encoder_packet_time_cts "
          "forced_keyframe_api=unavailable-public-stock-api",
@@ -431,14 +432,14 @@ StockEncoderTimelineProbe::~StockEncoderTimelineProbe() {
 
 bool StockEncoderTimelineProbe::Start() {
     if (worker_.joinable()) {
-        blog(LOG_WARNING, "[stock-probe] start ignored reason=already-running");
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "experiment", "start ignored reason=already-running");
         return false;
     }
 
     state_->scene_a = obs_get_source_by_name(scene_a_name_.c_str());
     state_->scene_b = obs_get_source_by_name(scene_b_name_.c_str());
     if (!state_->scene_a || !state_->scene_b) {
-        blog(LOG_ERROR, "[stock-probe] setup-failed reason=scene-not-found scene_a=%s scene_b=%s",
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "experiment", "setup-failed reason=scene-not-found scene_a=%s scene_b=%s",
              scene_a_name_.c_str(), scene_b_name_.c_str());
         return false;
     }
@@ -446,7 +447,7 @@ bool StockEncoderTimelineProbe::Start() {
     state_->view_a = obs_view_create();
     state_->view_b = obs_view_create();
     if (!state_->view_a || !state_->view_b) {
-        blog(LOG_ERROR, "[stock-probe] setup-failed reason=obs_view_create");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "experiment", "setup-failed reason=obs_view_create");
         Stop();
         return false;
     }
@@ -456,13 +457,13 @@ bool StockEncoderTimelineProbe::Start() {
     state_->video_a = obs_view_add(state_->view_a);
     state_->video_b = obs_view_add(state_->view_b);
     if (!state_->video_a || !state_->video_b) {
-        blog(LOG_ERROR, "[stock-probe] setup-failed reason=obs_view_add");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "experiment", "setup-failed reason=obs_view_add");
         Stop();
         return false;
     }
 
-    blog(LOG_INFO,
-         "[stock-probe] setup-complete view_a=SceneA view_b=SceneB topology=two-views-two-video_t-two-encoders "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+         "setup-complete view_a=SceneA view_b=SceneB topology=two-views-two-video_t-two-encoders "
          "activation=stock-null-output packet_identity=public-encoder-packet-time-only "
          "source_frame_id_observable=false source_cts_identity_observable=true patched_association_api_used=false");
     stop_requested_ = false;
@@ -472,10 +473,10 @@ bool StockEncoderTimelineProbe::Start() {
 
 void StockEncoderTimelineProbe::Stop() {
     stop_requested_ = true;
-    blog(LOG_INFO, "[sync-shutdown] probe-stop begin worker_joinable=%s", worker_.joinable() ? "true" : "false");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "shutdown", "probe-stop begin worker_joinable=%s", worker_.joinable() ? "true" : "false");
     if (worker_.joinable()) {
         worker_.join();
-        blog(LOG_INFO, "[sync-shutdown] probe-stop worker-joined");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "shutdown", "probe-stop worker-joined");
     }
 
     if (!state_) {
@@ -501,19 +502,19 @@ void StockEncoderTimelineProbe::Stop() {
         obs_source_release(state_->scene_b);
         state_->scene_b = nullptr;
     }
-    blog(LOG_INFO, "[sync-shutdown] probe-stop views-released");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "shutdown", "probe-stop views-released");
 }
 
 void StockEncoderTimelineProbe::Run() {
     const ProbeConfig config = ReadConfig();
-    blog(LOG_INFO,
-         "[stock-probe] begin clean_runtime=true encoder_ids=%s,%s boundary_cycles=%u long_run_seconds=%u "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+         "begin clean_runtime=true encoder_ids=%s,%s boundary_cycles=%u long_run_seconds=%u "
          "cycle_warmup_ms=%u poc_seconds=%u poc_warmup_ms=%u source_frame_id_identity=unobservable "
          "source_cts_identity=encoder_packet_time_cts "
          "lag_injector=unavailable",
          kX264EncoderId, kNvencEncoderId, config.boundary_cycles, config.long_run_seconds, config.cycle_warmup_ms,
          config.poc_duration_seconds, config.poc_warmup_ms);
-    blog(LOG_INFO, "[stock-probe] output-harness id=%s purpose=satisfy-stock-null-output-audio-flag "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment", "output-harness id=%s purpose=satisfy-stock-null-output-audio-flag "
                   "video-observations=filtered-to-OBS_ENCODER_VIDEO files_or_muxers=false",
          kAudioEncoderId);
 
@@ -524,10 +525,10 @@ void StockEncoderTimelineProbe::Run() {
         }
         const enum obs_module_load_state load_state = obs_encoder_load_state(encoder_id);
         const char* display_name = obs_encoder_get_display_name(encoder_id);
-        blog(LOG_INFO, "[stock-probe] encoder-availability id=%s load_state=%d display_name=%s", encoder_id,
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment", "encoder-availability id=%s load_state=%d display_name=%s", encoder_id,
              static_cast<int>(load_state), display_name ? display_name : "unknown");
         if (load_state != OBS_MODULE_ENABLED) {
-            blog(LOG_WARNING, "[stock-probe] encoder-skipped id=%s reason=stock-module-not-loaded", encoder_id);
+            OBS_SYNC_REPLAY_LOG(LOG_WARNING, "experiment", "encoder-skipped id=%s reason=stock-module-not-loaded", encoder_id);
             continue;
         }
 
@@ -577,8 +578,8 @@ void StockEncoderTimelineProbe::Run() {
                 }
             }
 
-            blog(LOG_INFO,
-             "[stock-probe] activation-begin encoder=%s strategy=%s cycle=%u canonical_obs_pts=%llu "
+            OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+             "activation-begin encoder=%s strategy=%s cycle=%u canonical_obs_pts=%llu "
                  "obs_root_frame_count=%u obs_lagged_frames=%u group=%s",
                  encoder_id, mode, cycle + 1, static_cast<unsigned long long>(obs_get_video_frame_time()),
                  obs_get_total_frames(), obs_get_lagged_frames(), group ? "true" : "false");
@@ -623,8 +624,8 @@ void StockEncoderTimelineProbe::Run() {
                 WaitForOutputInactive(output_a);
                 WaitForOutputInactive(output_b);
                 const ExperimentResult result = CompareCaptures(capture_a, capture_b);
-                blog(result.packet_pts_cts_mapping_equal ? LOG_INFO : LOG_WARNING,
-                     "[stock-probe] activation-result encoder=%s strategy=%s cycle=%u started_a=%s started_b=%s "
+                OBS_SYNC_REPLAY_LOG(result.packet_pts_cts_mapping_equal ? LOG_INFO : LOG_WARNING, "experiment",
+                     "activation-result encoder=%s strategy=%s cycle=%u started_a=%s started_b=%s "
                      "first_observed_packet_cts_a=%llu first_observed_packet_cts_b=%llu first_cts_equal=%s "
                      "packet_count_a=%llu packet_count_b=%llu packet_pts_cts_mismatches=%llu "
                      "packet_cts_mapping_equal=%s packet_timing_available=%s source_cts_mismatches=%llu "
@@ -650,7 +651,7 @@ void StockEncoderTimelineProbe::Run() {
                      capture_a.packets.empty() ? -1LL : static_cast<long long>(capture_a.packets.back().pts),
                      capture_b.packets.empty() ? -1LL : static_cast<long long>(capture_b.packets.back().pts));
             } else {
-                blog(LOG_ERROR, "[stock-probe] activation-result encoder=%s strategy=%s cycle=%u status=not-ready",
+                OBS_SYNC_REPLAY_LOG(LOG_ERROR, "experiment", "activation-result encoder=%s strategy=%s cycle=%u status=not-ready",
                      encoder_id, mode, cycle + 1);
             }
 
@@ -711,8 +712,8 @@ void StockEncoderTimelineProbe::Run() {
             ready = group && obs_encoder_set_group(encoder_a, group) && obs_encoder_set_group(encoder_b, group);
         }
 
-        blog(LOG_INFO,
-             "[stock-probe] long-run-begin encoder=%s seconds=%u strategy=grouped program_scene_switch=true "
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+             "long-run-begin encoder=%s seconds=%u strategy=grouped program_scene_switch=true "
              "canonical_obs_pts=%llu obs_root_frame_count=%u obs_lagged_frames=%u epoch_tick_stride=%u "
              "forced_keyframe_api=unavailable-public-stock-api",
              encoder_id, config.long_run_seconds, static_cast<unsigned long long>(obs_get_video_frame_time()),
@@ -752,8 +753,8 @@ void StockEncoderTimelineProbe::Run() {
             WaitForOutputInactive(output_b);
             const ExperimentResult result = CompareCaptures(capture_a, capture_b);
             AnalyzeRootEpochs(encoder_id, epoch_capture, capture_a, capture_b);
-            blog(result.packet_pts_cts_mapping_equal ? LOG_INFO : LOG_WARNING,
-                 "[stock-probe] long-run-result encoder=%s duration_seconds=%u packet_count_a=%llu packet_count_b=%llu "
+            OBS_SYNC_REPLAY_LOG(result.packet_pts_cts_mapping_equal ? LOG_INFO : LOG_WARNING, "experiment",
+                 "long-run-result encoder=%s duration_seconds=%u packet_count_a=%llu packet_count_b=%llu "
                  "first_observed_packet_cts_a=%llu first_observed_packet_cts_b=%llu packet_pts_cts_mismatches=%llu "
                  "packet_cts_mapping_equal=%s source_cts_mismatches=%llu source_cts_mapping_equal=%s "
                  "source_pts_gaps=%llu obs_lagged_frames=%u "
@@ -808,8 +809,8 @@ void StockEncoderTimelineProbe::Run() {
                                  config.poc_warmup_ms, &stop_requested_);
     }
 
-    blog(LOG_INFO,
-         "[stock-probe] complete decision_basis=public_root_tick_plus_encoder_packet_cts "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "experiment",
+         "complete decision_basis=public_root_tick_plus_encoder_packet_cts "
          "source_frame_id_proof=false source_cts_identity_observed=true");
 }
 

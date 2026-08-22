@@ -1,7 +1,10 @@
 # Stock OBS Research Runtime Contract
 
-This branch's stock-OBS experiment starts from a clean `obs-dev` portable runtime.
-The reproducible entry point is:
+This document describes the optional destructive test environment. Normal
+development/manual testing must use `scripts/start.ps1`, which preserves the
+existing portable profile, scene collection, and settings.
+
+The reproducible research entry point is:
 
 ```powershell
 .\scripts\build.ps1
@@ -18,8 +21,8 @@ harness is no longer part of the product module; control behavior is validated b
 the focused control/UI-state tests and by manual plugin interaction when desktop
 automation is available.
 
-`research.ps1` refuses to modify a running portable OBS process. It clears
-the runtime's `config` directory while preserving the deployed plugin data and locale
+`research.ps1` refuses to modify a running portable OBS process. It clears the
+runtime's `config` directory while preserving the deployed plugin data and locale
 files, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
 experiment and is regenerated on every run.
@@ -46,28 +49,22 @@ JSON, recording output, replay buffer, encoder, or plugin-specific state is supp
 Stock OBS creates its empty collection and initializes the root video pipeline from
 this profile.
 
-After the collection is active, the plugin uses public libobs APIs to create:
+The plugin does not create deterministic test scenes. After the collection is
+active, create at least four ordinary scenes in OBS for a topology acceptance run,
+open a prepared collection, or use the research-only
+`scripts/prepare-obs-topology-fixture.ps1` while OBS is closed. The plugin discovers all real top-level scenes with public
+`obs_enum_scenes()`, obtains each public source UUID with
+`obs_source_get_uuid()`, retains the source reference, and preserves callback order.
+Master is added as the explicit first stream.
 
-```text
-Sync Research Scene A
-`-- Sync Research Synthetic A (color_source, 1920x1080, opaque red)
+The plugin records every topology entry and epoch transition in the OBS log. Use
+the sequence in [`scene-topology.md`](scene-topology.md) to verify idle discovery,
+rename continuity, active add/remove staging, and pending apply after both
+consumers stop. A collection cleanup is an explicit coordinated shutdown boundary;
+the following collection-changed event starts a new idle runtime.
 
-Sync Research Scene B
-`-- Sync Research Synthetic B (color_source, 1920x1080, opaque blue)
-```
-
-Stock OBS creates one empty localized placeholder scene when it initializes a new
-scene collection. The plugin records that placeholder and item count, removes it only
-when it is the sole empty scene, and then rechecks the namespace before construction.
-Any additional scene or any item in the placeholder invalidates the run. The plugin
-records the initial source/scene counts and every bootstrap API action in
-the OBS log. It creates the plugin-owned control runtime idle only after the
-environment has passed the fixed-video and zero-existing-source checks. Bootstrap is registered from
-`obs_module_post_load` and runs on `OBS_FRONTEND_EVENT_FINISHED_LOADING`, after OBS
-activates its empty collection and on the frontend thread required by stock scene
-signals.
-
-The clean-runtime preflight is necessary for video settings because OBS initializes
+The clean-runtime preflight is necessary only for deterministic research video
+settings because OBS initializes
 the root video output before third-party module callbacks and `obs_reset_video()`
 rejects changes while that output is active. This is a generated setup step, not a
 manual OBS configuration step.

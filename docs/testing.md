@@ -135,10 +135,11 @@ identical per-packet PTS/DTS/keyframe metadata and equal durations within each p
 
 ### OBS end-to-end tests
 
-Exercise the real plugin with the deterministic visual counter, two selected scenes,
-NVENC H.264, MKV output, and one save hotkey. Retain paired files and structured logs
-for failures. Confirm the filenames share a replay identifier and both files represent
-the same selected master range.
+Exercise the real plugin with at least four ordinary scenes in a portable OBS scene
+collection, NVENC H.264, MKV output, and one save hotkey. Retain paired files and
+structured logs for failures. Confirm the topology log contains Master followed by
+all discovered scene UUIDs in collection order, and that every saved output uses the
+same selected master range.
 
 ## Stress Matrix
 
@@ -204,43 +205,69 @@ portable OBS instance, observing the `[obs-sync-replay] plugin loaded` log entry
 closing OBS normally with the matching unload entry. These checks establish module
 integration only and are not synchronization evidence.
 
-## Clean Runtime Bootstrap Validation
+## Normal startup and topology validation
+
+Production-like acceptance uses the existing portable OBS environment:
+
+```powershell
+./scripts/build.ps1
+./scripts/start.ps1
+```
+
+The normal launcher preserves the selected profile, scene collection, and settings.
+It does not write `user.ini` or `basic.ini`, reset `config`, select `Sync Replay
+Research`, or create synthetic scenes. The plugin waits for frontend readiness,
+discovers the current top-level scene collection, and remains idle with zero plugin
+encoders until Recording or Replay starts.
+
+Validate empty/new, one-scene, and many-scene collections. Zero real scenes is valid
+and produces Master only. A scene containing groups, nested scenes, and ordinary
+sources still produces one stream for that top-level scene; nested content must not
+become duplicate video streams.
+
+The following destructive research-runtime procedure is optional and is not normal
+startup evidence:
 
 The stock-OBS research experiment must be launched with
 `scripts/research.ps1` after `scripts/build.ps1`. The launcher resets the configured
 portable runtime and generates only the documented `Sync Replay Research` profile
 video keys; it must not be replaced with manual UI setup or a prior Phase 1–7 runtime.
 
-The runtime log must show this ordered evidence before any timeline or encoder result
-is considered:
+The clean runtime log must show the fixed video check and idle plugin startup before
+any timeline or encoder result is considered. The clean launcher creates no scenes;
+create at least four ordinary scenes in the active collection for topology validation.
+The relevant evidence is:
 
 ```text
-[sync-bootstrap] waiting for frontend finished-loading; no capture will start automatically
-[sync-bootstrap] begin clean_runtime=true ...
-[sync-bootstrap] video-check observed base=1920x1080 output=1920x1080 fps=60/1 ...
-[sync-bootstrap] initial-source-check inputs=0 scenes=1
-[sync-bootstrap] stock-placeholder-check name=... items=0
-[sync-bootstrap] stock-placeholder remove complete name=...
-[sync-bootstrap] clean-source-check inputs=0 scenes=0
-[sync-bootstrap] create-scene complete name=Sync Research Scene A ...
-[sync-bootstrap] create-scene complete name=Sync Research Scene B ...
-[sync-bootstrap] complete scene_a=... scene_b=...
-[plugin-control] initialized idle=true active_encoder_count=0
-[plugin-ui] native controls replaced dock=controlsDock record=recordButton replay=replayBufferButton save=saveReplayButton
+[obs-sync-replay] plugin loaded ...
+[obs-sync-replay] control: initialized idle=true active_encoder_count=0
+[obs-sync-replay] topology: event=initial-discovery ...
+[obs-sync-replay] topology: stream kind=master identity=master ...
+[obs-sync-replay] topology: stream kind=scene identity=<uuid-1> ...
+[obs-sync-replay] topology: stream kind=scene identity=<uuid-2> ...
+[obs-sync-replay] topology: stream kind=scene identity=<uuid-3> ...
+[obs-sync-replay] topology: stream kind=scene identity=<uuid-4> ...
+[obs-sync-replay] ui: native controls replaced dock=controlsDock record=recordButton replay=replayBufferButton save=saveReplayButton
 [obs-sync-replay] plugin-owned controls ready ui_replaced=true recording=off replay=off active_encoders=0
 ```
 
-Any bootstrap failure, name collision, nonzero initial input count, additional scene,
-non-empty stock placeholder, video mismatch, or missing completion line invalidates
-the run. The synthetic `color_source` inputs
-are the only experiment content and require no camera, display capture, external file,
-recording output, replay-buffer configuration, or existing scene/source name.
+Missing UUIDs, topology discovery failure, participant changes inside an active epoch,
+or encoder activation caused only by an idle topology change invalidates the run.
+Rename a scene and confirm its UUID is unchanged and no encoder is recreated. Add a
+scene during capture and confirm `discovery-staged` followed by `pending-applied`.
+Remove an active scene and confirm its original participant remains in the epoch,
+then disappears only after the pending topology applies.
 
 ### Phase 7 control validation
 
+`scene-topology-test` covers explicit Master identity, collection ordering, duplicate
+rejection, rename continuity, idle add/remove, immutable active-epoch participants,
+staged topology, pending apply, and identity-keyed future participation flags.
+
 `capture-control-test` covers the explicit stream modes, aggregate encoder demand,
+Master-only and dynamic Master-plus-N stream counts, combined-consumer reuse,
 idempotent and invalid commands, Recording/Replay handoff in both directions,
-mixed Master/Scene A/Scene B modes, disabled streams, total-idle release, and fresh
+mixed identity-keyed scene modes, disabled streams, total-idle release, and fresh
 capture-epoch creation. The test also verifies that Recording-only capture does not
 retain replay packets, that unavailable replay rejects Start/Save, that disabling
 replay stops only the replay consumer, and that re-enabling does not auto-start it.
@@ -250,13 +277,13 @@ enabled configuration, unsupported stock backends, and the explicit emergency
 bound for stock-unlimited modes. `synchronized-capture-session-test` covers the
 global shared packet budget, common-keyframe eviction, and live capacity updates.
 
-For the default `both,both,both` configuration, control tests must show three active
-video encoders during Recording-only, Replay-only, and concurrent operation;
+For the three-stream identity-keyed control-test fixture, tests must show three
+active video encoders during Recording-only, Replay-only, and concurrent operation;
 `encoder-retain` events must appear when a consumer handoff keeps an encoder alive,
 and active count must reach zero only after both consumers stop. Runtime output
-validation remains the Phase 6 requirement: selected Recording or Replay trios must
-preserve one common source-CTS range and equal PTS/DTS/keyframe signatures for every
-participating stream.
+validation remains the Phase 6 requirement: the discovered Master-plus-scenes
+participant set must preserve one common source-CTS range and equal PTS/DTS/keyframe
+signatures for every participating stream.
 
 ### Phase 7 plugin-owned UI validation
 
@@ -287,7 +314,7 @@ On shutdown, plugin controls are disabled before both consumers are stopped, rep
 saves are joined, encoders reach zero, hotkeys are unregistered, and the native
 widgets are restored before plugin controls are released. A manual acceptance run
 should verify Recording-only, Replay-only, overlap/handoff, repeated Save Replay,
-and graceful close for the deterministic Master/Scene A/Scene B `Both` configuration.
+and graceful close for the discovered Master plus all-scene `Both` configuration.
 
 The adapter deliberately uses no pixel or screenshot assertions. It relies on the
 OBS 32.2.1 object names and row-layout structure documented above, copies native

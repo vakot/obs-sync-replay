@@ -1,7 +1,8 @@
 # OBS Synchronized Multi-Scene Replay
 
-This repository is preparing a Windows-first OBS Studio plugin that saves two
-separately rendered scenes as two MKV replay files on one shared video timeline.
+This repository is preparing a Windows-first OBS Studio plugin that saves the
+Master/Program output and every top-level OBS scene as separate MKV replay files on
+one shared video timeline.
 Frame-perfect pairing is the product: two independently started replay outputs are
 not an acceptable architecture.
 
@@ -20,7 +21,9 @@ with the copyable configure, build, portable deployment, and debugging workflow 
 - [`docs/building.md`](docs/building.md): Windows toolchain, build presets, portable
   OBS deployment, runtime validation, and debugging;
 - [`docs/research-runtime.md`](docs/research-runtime.md): clean stock-OBS research
-  runtime and deterministic synthetic scene bootstrap;
+  runtime and real-scene topology acceptance workflow;
+- [`docs/scene-topology.md`](docs/scene-topology.md): public OBS identity, ordering,
+  ownership, and active-epoch lifecycle;
 - [`docs/replay-configuration.md`](docs/replay-configuration.md): OBS Replay Buffer
   profile keys, availability policy, refresh lifecycle, and shared memory bound;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
@@ -30,10 +33,11 @@ with the copyable configure, build, portable deployment, and debugging workflow 
 
 ```text
 ONE MASTER VIDEO TIMELINE
-|-- Scene A -> output A frame N
-`-- Scene B -> output B frame N
+|-- Master/Program -> separate program output frame N
+`-- Scene 1..N -> separate scene outputs frame N
 ```
 
-Both frames must carry the same master-frame identity and PTS. Replay boundaries are
-chosen once for the pair. See the architecture and testing documents for the
-synchronization contract and acceptance evidence.
+Every corresponding frame must carry the same master-frame identity and PTS. Replay
+boundaries are chosen once for the complete Master + N stream set. See the
+architecture and testing documents for the synchronization contract and acceptance
+evidence.
