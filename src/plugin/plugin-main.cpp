@@ -5,6 +5,7 @@
 #include <QtWidgets/QWidget>
 
 #include "control/plugin-capture-runtime.hpp"
+#include "control/obs-audio-packet-output.hpp"
 #include "plugin/plugin-log.hpp"
 #include "ui/capture-controls.hpp"
 #include "ui/obs-controls-adapter.hpp"
@@ -250,6 +251,7 @@ MODULE_EXPORT const char* obs_module_description(void) {
 
 bool obs_module_load(void) {
     shutdown_requested.store(false, std::memory_order_release);
+    obs_sync_replay::RegisterPacketOutputs();
     OBS_SYNC_REPLAY_LOG(LOG_INFO, "plugin", "plugin loaded (version %s); plugin-owned capture idle",
                         OBS_SYNC_REPLAY_VERSION);
     return true;

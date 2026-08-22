@@ -71,6 +71,55 @@ profile boundary in all modes. The implementation applies the profile bitrate
 and encoder defaults deterministically; runtime encoder extradata is taken from
 the created OBS encoder before muxing when it becomes available.
 
+### Encoder selection resolution
+
+OBS 32.2.1 stores Simple-output recording selections as codec aliases. The
+default `SimpleOutput/RecAudioEncoder` is `aac`, while `opus` is another
+supported alias. Stock Simple output resolves those aliases through
+`frontend/utility/audio-encoders.cpp` (`GetSimpleAACEncoderForBitrate` and
+`GetSimpleOpusEncoderForBitrate`) before calling `obs_audio_encoder_create()`.
+The fallback AAC/Opus implementations are `ffmpeg_aac` and `ffmpeg_opus`;
+platform encoders such as `CoreAudio_AAC` or `libfdk_aac` may override the
+fallback when registered and suitable for the selected bitrate.
+
+Advanced output normally stores the native ID directly in
+`AdvOut/RecAudioEncoder`. If it is `none`, stock Advanced output falls back to
+the stream encoder in `AdvOut/AudioEncoder`. The adapter preserves a registered
+native ID and otherwise resolves the configured codec alias against the live
+public encoder registry (`obs_enum_encoder_types`, filtered to
+`OBS_ENCODER_AUDIO`, and `obs_get_encoder_codec`). Its AAC preference order is
+`CoreAudio_AAC`, `libfdk_aac`, then `ffmpeg_aac`; Opus prefers `ffmpeg_opus`
+before the first registered Opus encoder. This keeps the alias mapping isolated
+from capture and avoids assuming that `aac` is itself a libobs encoder ID.
+
+Each resolved encoder is logged as
+`[obs-sync-replay] audio: encoder-resolve configured=... resolved=... mixer=...`.
+An unavailable alias or native ID invalidates the configuration before any
+capture resource is created. Enabled mixer indices remain ascending OBS
+indices; their sequential registration order is the output/mux track order.
+One encoder is created per configured track, regardless of scene count.
+
+### Encoded packet output contract
+
+OBS 32.2.1's stock `null_output` is an encoded AV output. Its public startup
+contract therefore rejects a video-only or audio-only attachment, and its
+encoded packet timing callbacks are supplied by the AV interleaver. The plugin
+registers one small output adapter through public `obs_register_output()` with
+the same encoded multi-track AV contract and no file/network side effect.
+
+The shared output carries the Master video encoder plus every configured audio
+encoder. Each scene output carries its scene video encoder and references the
+same configured audio encoders only to satisfy the OBS AV interleaver; its
+packet callback accepts video packets, while the shared audio callbacks accept
+audio packets. No audio encoder is duplicated per scene, and the packet writer
+receives the same encoded audio packet objects for Recording and Replay.
+
+The Master callback and shared audio callbacks are attached to one output and
+start/stop as one transaction. Scene video encoders remain members of the same
+encoder group and use the same Master frame coordinator. This keeps the
+`encoder_packet_time` source CTS available for both media kinds without
+reconstructing it from wall-clock time or a video-only default callback.
+
 ### Lifecycle and synchronization boundary
 
 The shared audio encoder set is created once for the capture epoch, starts when
@@ -82,6 +131,18 @@ while Recording and Replay own their asynchronous queues/snapshots.
 
 The current implementation does not claim isolated scene audio. That remains a
 future API requirement, not an implicit product policy or a workaround.
+
+### Portable runtime validation
+
+On the pinned portable OBS 32.2.1 profile, Simple Recording configured
+`RecAudioEncoder=aac` and one recording track. The live registry contained
+`ffmpeg_aac`, so the final mapping was `aac -> ffmpeg_aac`, mixer 0, output
+track 1. Recording started and stopped successfully with the real profile;
+the first Master and both scene packets reported the same source CTS
+(`122221178864078`). The run finalized with 2,190 common packets and produced
+three MKV files. `ffprobe` reported one H.264 video stream and one AAC audio
+stream in each file at 48 kHz stereo. Replay was disabled in that unchanged
+profile, so no Replay/Save Replay run was performed.
 
 ## Required conclusion
 
@@ -342,8 +403,11 @@ represent the correct six-track scene mix.
 
 Introducing an unproven mixer would violate the synchronization rule that
 missing or incorrect work must not be concealed by later timing repair. No
-production source, audio encoder path, replay packet path, or runtime audio
-workaround was added on this branch.
+production per-scene-isolated audio path or runtime workaround was added for
+the original blocked requirement. The approved shared global-track MVP does
+have a production encoder, packet, and mux path, and its encoder preparation is
+transactional: all resolved tracks must be available before video resources or
+capture activation are committed.
 
 ## Next research direction
 

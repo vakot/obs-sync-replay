@@ -57,6 +57,7 @@ target_include_directories(obs-sync-replay-capture PUBLIC "${CMAKE_CURRENT_SOURC
 add_library(
   obs-sync-replay-control
   STATIC
+  src/config/audio-encoder-resolution.cpp
   src/config/replay-configuration.cpp
   src/control/capture-configuration.cpp
   src/control/capture-control.cpp
@@ -92,6 +93,7 @@ add_library(
   MODULE
   src/config/obs-audio-configuration.cpp
   src/config/obs-replay-configuration.cpp
+  src/control/obs-audio-packet-output.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
   src/control/plugin-capture-runtime.cpp
   src/topology/obs-scene-topology.cpp
@@ -176,6 +178,14 @@ if(MSVC)
   target_compile_options(replay-configuration-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME replay-configuration COMMAND replay-configuration-test)
+
+add_executable(audio-encoder-resolution-test tests/config/audio-encoder-resolution-test.cpp)
+target_link_libraries(audio-encoder-resolution-test PRIVATE obs-sync-replay-control)
+target_compile_features(audio-encoder-resolution-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(audio-encoder-resolution-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME audio-encoder-resolution COMMAND audio-encoder-resolution-test)
 
 add_executable(
   synchronized-scene-renderer-test

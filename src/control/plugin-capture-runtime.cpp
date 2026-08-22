@@ -4,6 +4,7 @@
 #include "config/obs-audio-configuration.hpp"
 #include "config/obs-replay-configuration.hpp"
 #include "control/capture-control.hpp"
+#include "control/obs-audio-packet-output.hpp"
 #include "plugin/plugin-log.hpp"
 #include "recording/synchronized-recording-consumer.hpp"
 #include "replay/synchronized-replay-consumer.hpp"
@@ -29,7 +30,6 @@ namespace obs_sync_replay {
 
 namespace {
 
-constexpr char kNullOutputId[] = "null_output";
 constexpr char kX264EncoderId[] = "obs_x264";
 constexpr char kNvencEncoderId[] = "obs_nvenc_h264_tex";
 constexpr uint32_t kFallbackWidth = 1920;
@@ -69,7 +69,7 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
                     void *param) {
     auto *context = static_cast<CallbackContext *>(param);
     if (!context || !context->capture || !packet || !packet_time ||
-        (packet->type != OBS_ENCODER_VIDEO && !(context->shared_audio && packet->type == OBS_ENCODER_AUDIO))) {
+        (context->shared_audio ? packet->type != OBS_ENCODER_AUDIO : packet->type != OBS_ENCODER_VIDEO)) {
         return;
     }
     if (packet->size == 0 || !packet_time || packet->timebase_num <= 0 || packet->timebase_den <= 0) {
@@ -267,12 +267,34 @@ class PluginEncoderController final : public EncoderController {
         if (!resource.output || resource.capture_id != stream_id) {
             return false;
         }
+        if (stream_id == 0) {
+            if (!audio_started_ && !StartSharedAudio()) {
+                return false;
+            }
+            resource.started = true;
+            OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "output-started identity=%s via=shared-av-output",
+                                StreamIdentityLabel(stream.identity).c_str());
+            return true;
+        }
         if (!audio_started_ && !StartSharedAudio()) {
             return false;
         }
+        const bool can_begin = obs_output_can_begin_data_capture(resource.output, 0);
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control",
+                            "output-start-attempt identity=%s can_begin=%s active=%s video_encoder=%s video_media=%s",
+                            StreamIdentityLabel(stream.identity).c_str(), can_begin ? "true" : "false",
+                            obs_output_active(resource.output) ? "true" : "false",
+                            obs_output_get_video_encoder(resource.output) ? "present" : "missing",
+                            resource.video_encoder && obs_encoder_video(resource.video_encoder) ? "present" : "missing");
         resource.started = obs_output_start(resource.output);
         if (!resource.started) {
             LogOutputFailure("start", resource);
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "output-start-encoder-state identity=%s active=%s error=%s",
+                                StreamIdentityLabel(stream.identity).c_str(),
+                                resource.video_encoder && obs_encoder_active(resource.video_encoder) ? "true" : "false",
+                                resource.video_encoder && obs_encoder_get_last_error(resource.video_encoder)
+                                    ? obs_encoder_get_last_error(resource.video_encoder)
+                                    : "none");
             if (std::none_of(resources_.begin(), resources_.end(),
                              [](const StreamResources& candidate) { return candidate.started; })) {
                 StopSharedAudio();
@@ -350,13 +372,16 @@ class PluginEncoderController final : public EncoderController {
     std::vector<obs_encoder_t*> audio_encoders_;
     std::vector<CallbackContext> audio_callbacks_;
     bool audio_started_ = false;
+    bool master_callback_attached_ = false;
 
     bool CreateSharedAudio() {
         if (audio_output_ || audio_configuration_.recording_tracks.empty()) {
             return audio_output_ != nullptr;
         }
-        audio_output_ = obs_output_create(kNullOutputId, "obs-sync-replay-audio", nullptr, nullptr);
+        audio_output_ = obs_output_create(kPacketOutputId, "obs-sync-replay-audio", nullptr, nullptr);
         if (!audio_output_) {
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio", "output-create-failed type=%s reason=obs-output-create",
+                                kPacketOutputId);
             return false;
         }
         audio_encoders_.reserve(audio_configuration_.recording_tracks.size());
@@ -374,17 +399,21 @@ class PluginEncoderController final : public EncoderController {
                 obs_data_release(settings);
             }
             if (!encoder) {
+                OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio",
+                                    "encoder-create-failed configured=%s resolved=%s track=%zu mixer=%zu",
+                                    config.encoder_id.c_str(), config.encoder_id.c_str(), index,
+                                    config.mixer_index);
                 ReleaseSharedAudio();
                 return false;
             }
             obs_encoder_set_audio(encoder, obs_get_audio());
             obs_output_set_audio_encoder(audio_output_, encoder, index);
             audio_encoders_.push_back(encoder);
+            const char* codec = obs_get_encoder_codec(config.encoder_id.c_str());
+            const uint64_t samples_per_packet = codec && std::strcmp(codec, "opus") == 0 ? 960 : 1024;
             audio_callbacks_.push_back(CallbackContext{&capture_, 0, "shared-audio", 0, 0, 0,
                                                         static_cast<AudioTrackId>(index), true,
-                                                        config.encoder_id == "ffmpeg_aac" || config.encoder_id == "aac"
-                                                            ? (1'000'000'000ULL * 1024 / config.sample_rate)
-                                                            : (1'000'000'000ULL * 960 / config.sample_rate)});
+                                                        (1'000'000'000ULL * samples_per_packet) / config.sample_rate});
             obs_output_add_packet_callback(audio_output_, OnOutputPacket, &audio_callbacks_.back());
         }
         return true;
@@ -399,6 +428,15 @@ class PluginEncoderController final : public EncoderController {
         }
         audio_started_ = obs_output_start(audio_output_);
         if (!audio_started_) {
+            const char* error = obs_output_get_last_error(audio_output_);
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio", "output-start-failed type=%s error=%s",
+                                kPacketOutputId, error ? error : "unspecified");
+            for (size_t index = 0; index < audio_encoders_.size(); ++index) {
+                const char* encoder_error = obs_encoder_get_last_error(audio_encoders_[index]);
+                OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio", "encoder-start-failed track=%zu id=%s error=%s",
+                                    index, audio_configuration_.recording_tracks[index].encoder_id.c_str(),
+                                    encoder_error ? encoder_error : "unspecified");
+            }
             ReleaseSharedAudio();
         }
         return audio_started_;
@@ -415,6 +453,11 @@ class PluginEncoderController final : public EncoderController {
 
     void ReleaseSharedAudio() noexcept {
         if (audio_output_) {
+            if (master_callback_attached_ && !resources_.empty()) {
+                obs_output_remove_packet_callback(audio_output_, OnOutputPacket, &resources_[0].callback);
+                obs_output_set_video_encoder(audio_output_, nullptr);
+                master_callback_attached_ = false;
+            }
             for (size_t index = 0; index < audio_callbacks_.size(); ++index) {
                 obs_output_remove_packet_callback(audio_output_, OnOutputPacket, &audio_callbacks_[index]);
             }
@@ -441,13 +484,19 @@ class PluginEncoderController final : public EncoderController {
             return false;
         }
         StreamResources& resource = Resource(stream_id);
+        if (!CreateSharedAudio()) {
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio",
+                                "encoder-create-failed reason=prepare-transaction track-count=%zu",
+                                audio_configuration_.recording_tracks.size());
+            return false;
+        }
         obs_data_t *settings = CreateVideoSettings(encoder_id_);
         resource.video_encoder = obs_video_encoder_create(encoder_id_, stream.name.c_str(), settings, nullptr);
-        resource.output = obs_output_create(kNullOutputId, stream.name.c_str(), nullptr, nullptr);
+        resource.output = obs_output_create(kPacketOutputId, stream.name.c_str(), nullptr, nullptr);
         if (settings) {
             obs_data_release(settings);
         }
-        if (!resource.video_encoder || !resource.output || !CreateSharedAudio()) {
+        if (!resource.video_encoder || !resource.output) {
             OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control",
                  "encoder-create-failed identity=%s stream_id=%u video=%s audio=%s output=%s "
                  "invariant=all-stream-resources-required",
@@ -455,6 +504,10 @@ class PluginEncoderController final : public EncoderController {
                  resource.video_encoder ? "created" : "missing", audio_output_ ? "created" : "missing",
                  resource.output ? "created" : "missing");
             ReleaseStream(resource);
+            if (std::none_of(resources_.begin(), resources_.end(),
+                             [](const StreamResources& candidate) { return candidate.started; })) {
+                ReleaseSharedAudio();
+            }
             return false;
         }
 
@@ -463,7 +516,16 @@ class PluginEncoderController final : public EncoderController {
         obs_encoder_set_video(resource.video_encoder, resource.video);
         obs_output_set_video_encoder(resource.output, resource.video_encoder);
         resource.callback = {&capture_, stream_id, stream.name.c_str()};
-        obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
+        if (stream_id == 0) {
+            obs_output_set_video_encoder(audio_output_, resource.video_encoder);
+            obs_output_add_packet_callback(audio_output_, OnOutputPacket, &resource.callback);
+            master_callback_attached_ = true;
+        } else {
+            for (size_t index = 0; index < audio_encoders_.size(); ++index) {
+                obs_output_set_audio_encoder(resource.output, audio_encoders_[index], index);
+            }
+            obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
+        }
         if (group_) {
             resource.grouped = obs_encoder_set_group(resource.video_encoder, group_);
             if (!resource.grouped) {
@@ -665,6 +727,11 @@ bool PluginCaptureRuntime::BuildControlState() {
     std::vector<ConfiguredStream> configured_streams;
     std::vector<video_t*> capture_videos;
     const ObsAudioConfiguration audio_configuration = ReadObsAudioConfiguration();
+    if (!audio_configuration.valid) {
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "audio", "configuration-invalid reason=%s",
+                            audio_configuration.error.c_str());
+        return false;
+    }
     for (const SceneTopologyEntry& entry : topology_model_.current().streams) {
         const StreamParticipationMode mode = entry.recording_enabled && entry.replay_enabled
                                                  ? StreamParticipationMode::Both
