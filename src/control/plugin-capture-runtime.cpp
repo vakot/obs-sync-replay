@@ -73,6 +73,9 @@ struct CallbackContext final {
     SynchronizedCaptureSession *capture = nullptr;
     CaptureStreamId stream_id = 0;
     const char *stream_name = nullptr;
+    uint64_t packet_count = 0;
+    uint64_t first_source_cts = 0;
+    uint64_t last_source_cts = 0;
 };
 
 void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encoder_packet_time *packet_time,
@@ -102,9 +105,18 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
             extra_data.assign(extra, extra + extra_size);
         }
     }
+    const uint64_t source_cts = copy.source_cts;
     if (!context->capture->Ingest(context->stream_id, std::move(copy), std::move(extra_data))) {
         blog(LOG_ERROR, "[plugin-control] packet-rejected stream=%s invariant=capture-session-accepted-packet-required",
              context->stream_name);
+        return;
+    }
+    ++context->packet_count;
+    context->last_source_cts = source_cts;
+    if (context->packet_count == 1) {
+        context->first_source_cts = source_cts;
+        blog(LOG_INFO, "[plugin-control] first-encoded-packet stream=%s source_cts=%llu capture_stream_ready=true",
+             context->stream_name, static_cast<unsigned long long>(source_cts));
     }
 }
 
@@ -116,6 +128,8 @@ struct StreamResources final {
     obs_output_t *output = nullptr;
     CallbackContext callback;
     bool started = false;
+    bool grouped = false;
+    bool release_pending = false;
 };
 
 obs_data_t *CreateVideoSettings(const char *encoder_id) {
@@ -155,8 +169,23 @@ void WaitForOutputInactive(obs_output_t *output) {
 }
 
 void ReleaseStream(StreamResources &stream) {
+    if (stream.video_encoder && stream.grouped) {
+        if (!obs_encoder_set_group(stream.video_encoder, nullptr)) {
+            blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed stream=%s", StreamName(stream.id));
+            return;
+        } else {
+            blog(LOG_INFO, "[plugin-control] encoder-group-detached stream=%s", StreamName(stream.id));
+        }
+        stream.grouped = false;
+    }
     if (stream.output && stream.callback.capture) {
         obs_output_remove_packet_callback(stream.output, OnOutputPacket, &stream.callback);
+        blog(LOG_INFO,
+             "[plugin-control] packet-stream-stopped stream=%s encoded_packets=%llu first_source_cts=%llu "
+             "last_source_cts=%llu",
+             StreamName(stream.id), static_cast<unsigned long long>(stream.callback.packet_count),
+             static_cast<unsigned long long>(stream.callback.first_source_cts),
+             static_cast<unsigned long long>(stream.callback.last_source_cts));
     }
     if (stream.output) {
         obs_output_release(stream.output);
@@ -240,9 +269,33 @@ class PluginEncoderController final : public EncoderController {
             obs_output_stop(resource.output);
             WaitForOutputInactive(resource.output);
         }
-        ReleaseStream(resource);
         resource.started = false;
-            blog(LOG_INFO, "[plugin-control] encoder-release stream=%s family=%s", stream.name.c_str(), encoder_id_);
+        resource.release_pending = true;
+        if (std::none_of(resources_.begin(), resources_.end(),
+                         [](const StreamResources& candidate) { return candidate.started; })) {
+            // OBS only permits detaching a group member after every member has
+            // stopped. Defer destruction until this barrier so the group never
+            // retains stale encoder references across capture epochs.
+            for (StreamResources& candidate : resources_) {
+                if (candidate.video_encoder && candidate.grouped) {
+                    if (!obs_encoder_set_group(candidate.video_encoder, nullptr)) {
+                        blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed stream=%s",
+                             StreamName(candidate.id));
+                    } else {
+                        candidate.grouped = false;
+                        blog(LOG_INFO, "[plugin-control] encoder-group-detached stream=%s",
+                             StreamName(candidate.id));
+                    }
+                }
+            }
+            for (StreamResources& candidate : resources_) {
+                if (candidate.release_pending && !candidate.grouped) {
+                    ReleaseStream(candidate);
+                    candidate.release_pending = false;
+                }
+            }
+        }
+        blog(LOG_INFO, "[plugin-control] encoder-release stream=%s family=%s", stream.name.c_str(), encoder_id_);
     }
 
     bool IsActive(const CaptureStreamId stream_id) const noexcept override {
@@ -312,9 +365,14 @@ class PluginEncoderController final : public EncoderController {
         obs_output_set_audio_encoder(resource.output, resource.audio_encoder, 0);
         resource.callback = {&capture_, stream_id, stream.name.c_str()};
         obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
-        if (group_ && !obs_encoder_set_group(resource.video_encoder, group_)) {
-            blog(LOG_WARNING, "[plugin-control] encoder-group-join-skipped stream=%s reason=group-already-started",
-                 stream.name.c_str());
+        if (group_) {
+            resource.grouped = obs_encoder_set_group(resource.video_encoder, group_);
+            if (!resource.grouped) {
+                blog(LOG_ERROR, "[plugin-control] encoder-group-join-failed stream=%s reason=group-already-started",
+                     stream.name.c_str());
+                ReleaseStream(resource);
+                return false;
+            }
         }
         resource.id = stream.identity == StreamIdentity::Master
                           ? StreamId::Master
@@ -375,9 +433,9 @@ struct PluginCaptureRuntime::ControlState final {
     SynchronizedCaptureSession capture;
     CaptureConfiguration configuration;
     std::array<StreamResources, 3> resources{{
-        {StreamId::Master, 0, nullptr, nullptr, nullptr, {}, false},
-        {StreamId::SceneA, 0, nullptr, nullptr, nullptr, {}, false},
-        {StreamId::SceneB, 0, nullptr, nullptr, nullptr, {}, false},
+        {StreamId::Master, 0, nullptr, nullptr, nullptr, {}, false, false, false},
+        {StreamId::SceneA, 0, nullptr, nullptr, nullptr, {}, false, false, false},
+        {StreamId::SceneB, 0, nullptr, nullptr, nullptr, {}, false, false, false},
     }};
     obs_encoder_group_t *group = nullptr;
     std::array<video_t *, 3> scene_videos{};
@@ -509,7 +567,12 @@ ControlCommandResult PluginCaptureRuntime::StartRecording() {
         return Failed("runtime-not-initialized");
     }
     const std::string stem = "recording-" + std::to_string(++recording_number_) + "-" + std::to_string(WallClockNs());
-    return control_state_->control->StartRecording(OutputPaths(CaptureConsumer::Recording, stem.c_str()));
+    const ControlCommandResult result =
+        control_state_->control->StartRecording(OutputPaths(CaptureConsumer::Recording, stem.c_str()));
+    if (result.ok() && control_state_->control->recording_state() == RecordingConsumerState::Running) {
+        blog(LOG_INFO, "[plugin-control] recording-consumer-attached streams=3 shared_capture_running=true");
+    }
+    return result;
 }
 
 ControlCommandResult PluginCaptureRuntime::ToggleRecording() {
@@ -528,7 +591,17 @@ ControlCommandResult PluginCaptureRuntime::StopRecording() {
     if (!control_state_ || !control_state_->control) {
         return Failed("runtime-not-initialized");
     }
-    return control_state_->control->StopRecording();
+    const ControlCommandResult result = control_state_->control->StopRecording();
+    if (const auto recording = control_state_->control->recording_result()) {
+        blog(recording->success ? LOG_INFO : LOG_ERROR,
+             "[plugin-control] recording-finalized success=%s packets_muxed=%llu first_source_cts=%llu "
+             "last_source_cts=%llu streams=%llu error=%s",
+             recording->success ? "true" : "false", static_cast<unsigned long long>(recording->packet_count),
+             static_cast<unsigned long long>(recording->range.start_cts),
+             static_cast<unsigned long long>(recording->range.end_cts),
+             static_cast<unsigned long long>(recording->streams.size()), recording->error.c_str());
+    }
+    return result;
 }
 
 ControlCommandResult PluginCaptureRuntime::StartReplay() {
@@ -536,7 +609,11 @@ ControlCommandResult PluginCaptureRuntime::StartReplay() {
     if (!control_state_ || !control_state_->control) {
         return Failed("runtime-not-initialized");
     }
-    return control_state_->control->StartReplay();
+    const ControlCommandResult result = control_state_->control->StartReplay();
+    if (result.ok() && control_state_->control->replay_state() == ReplayConsumerState::Running) {
+        blog(LOG_INFO, "[plugin-control] replay-ring-attached streams=3 shared_capture_running=true retention=true");
+    }
+    return result;
 }
 
 ControlCommandResult PluginCaptureRuntime::ToggleReplay() {
@@ -556,7 +633,13 @@ ControlCommandResult PluginCaptureRuntime::SaveReplay() {
         return Failed("runtime-not-initialized");
     }
     const std::string stem = "replay-" + std::to_string(++replay_number_) + "-" + std::to_string(WallClockNs());
-    return control_state_->control->SaveReplay(OutputPaths(CaptureConsumer::Replay, stem.c_str()));
+    const ControlCommandResult result =
+        control_state_->control->SaveReplay(OutputPaths(CaptureConsumer::Replay, stem.c_str()));
+    if (result.ok()) {
+        ++replay_save_generation_;
+        blog(LOG_INFO, "[plugin-control] replay-history-snapshot requested=true async_mux=true");
+    }
+    return result;
 }
 
 ControlCommandResult PluginCaptureRuntime::StopReplay() {
@@ -571,6 +654,18 @@ void PluginCaptureRuntime::PollReplaySave() noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (control_state_ && control_state_->control) {
         control_state_->control->PollReplaySave();
+        if (const auto replay = control_state_->control->replay_result();
+            replay && replay_result_logged_generation_ < replay_save_generation_) {
+            blog(replay->success ? LOG_INFO : LOG_ERROR,
+                 "[plugin-control] replay-finalized success=%s payload_bytes=%llu first_source_cts=%llu "
+                 "last_source_cts=%llu streams=%llu error=%s",
+                 replay->success ? "true" : "false",
+                 static_cast<unsigned long long>(replay->snapshot_payload_bytes),
+                 static_cast<unsigned long long>(replay->range.start_cts),
+                 static_cast<unsigned long long>(replay->range.end_cts),
+                 static_cast<unsigned long long>(replay->streams.size()), replay->error.c_str());
+            replay_result_logged_generation_ = replay_save_generation_;
+        }
     }
 }
 

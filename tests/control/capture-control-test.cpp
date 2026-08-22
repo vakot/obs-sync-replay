@@ -24,6 +24,10 @@ PacketStreamConfig StreamConfig() {
     config.height = 1080;
     config.timebase_num = 1;
     config.timebase_den = 60000;
+    config.extra_data = {0x01, 0x42, 0xc0, 0x2a, 0xff, 0xe1, 0x00, 0x1c, 0x67, 0x42, 0xc0,
+                         0x2a, 0xda, 0x01, 0xe0, 0x08, 0x9f, 0x97, 0x01, 0x6a, 0x02, 0x02,
+                         0x02, 0x80, 0x00, 0x00, 0x03, 0x00, 0x80, 0x00, 0x00, 0x3c, 0x47,
+                         0x8c, 0x19, 0x50, 0x01, 0x00, 0x04, 0x68, 0xce, 0x3c, 0x80};
     return config;
 }
 
@@ -42,10 +46,18 @@ EncodedPacket Packet(const uint64_t source_cts, const bool keyframe = false) {
 CaptureConfiguration Configuration(const StreamParticipationMode master, const StreamParticipationMode scene_a,
                                    const StreamParticipationMode scene_b) {
     CaptureConfiguration configuration;
+    configuration.replay_duration_ns = 1;
     configuration.streams = {{StreamIdentity::Master, "master", master, StreamConfig()},
                              {StreamIdentity::SceneA, "scene_a", scene_a, StreamConfig()},
                              {StreamIdentity::SceneB, "scene_b", scene_b, StreamConfig()}};
     return configuration;
+}
+
+void RemovePaths(const std::vector<std::filesystem::path>& paths) {
+    for (const auto& path : paths) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
 }
 
 std::vector<std::filesystem::path> Paths(const char* const stem, const size_t count) {
@@ -114,10 +126,29 @@ void TestHandoffAndEncoderOwnership() {
 
     Require(engine.StartReplay().ok(), "start replay first");
     Require(engine.active_encoder_count() == 3, "replay-only must use three encoders");
+    for (CaptureStreamId stream = 0; stream < 3; ++stream) {
+        Require(capture.Ingest(stream, Packet(100, true)), "replay packet reaches shared capture");
+        Require(capture.Ingest(stream, Packet(110)), "replay history advances on shared capture");
+    }
+    const auto replay_only_paths = Paths("control-replay-only", 3);
+    Require(engine.SaveReplay(replay_only_paths).ok(), "replay-only save starts after common history");
+    engine.WaitForReplaySave();
+    if (!engine.replay_result() || !engine.replay_result()->success) {
+        std::cerr << "replay-only save error: "
+                  << (engine.replay_result() ? engine.replay_result()->error : "missing-result") << '\n';
+        Require(false, "replay-only save must finalize all synchronized streams");
+    }
+    RemovePaths(replay_only_paths);
     const size_t replay_epoch = engine.capture_epoch();
     Require(engine.StartRecording(Paths("control-handoff-recording", 3)).ok(), "attach recording to replay");
     Require(engine.active_encoder_count() == 3, "recording handoff must retain three encoders");
+    for (CaptureStreamId stream = 0; stream < 3; ++stream) {
+        Require(capture.Ingest(stream, Packet(200, true)), "recording packet reaches shared capture");
+        Require(capture.Ingest(stream, Packet(210)), "recording common prefix advances");
+    }
     Require(engine.StopRecording().ok(), "stop recording while replay continues");
+    Require(engine.recording_result() && engine.recording_result()->success,
+            "recording consumer must finalize synchronized MKVs");
     Require(engine.active_encoder_count() == 3 && engine.replay_state() == ReplayConsumerState::Running,
             "replay must continue after recording stop");
     Require(engine.StopReplay().ok(), "stop replay");
@@ -150,6 +181,8 @@ void TestMixedModesAndInvalidCommands() {
     Require(capture.metrics().retained_bytes == 0, "recording-only capture must not retain replay packets");
     Require(engine.StartReplay().ok(), "start mixed replay");
     Require(engine.active_encoder_count() == 3, "mixed replay must add scene B only");
+    Require(engine.SaveReplay(Paths("mixed-empty-replay", 2)).reason == "replay-save-rejected:insufficient-history",
+            "replay rejection must preserve the specific history reason");
     Require(engine.StartReplay().status == ControlCommandStatus::NoOp, "start replay must be idempotent");
     Require(engine.StopReplay().ok() && engine.active_encoder_count() == 2,
             "mixed replay stop must retain recording encoders");

@@ -70,7 +70,15 @@ ControlCommandResult CaptureControlEngine::StartRecording(std::vector<std::files
         recording_consumer_.reset();
         recording_state_ = RecordingConsumerState::Off;
         StopCaptureIfUnused();
-        return {ControlCommandStatus::Failed, "recording-infrastructure-start"};
+        return {ControlCommandStatus::Failed, "capture-failed"};
+    }
+    if (!capture_.running()) {
+        capture_.Unsubscribe(recording_consumer_.get());
+        recording_consumer_->Stop();
+        recording_consumer_.reset();
+        recording_state_ = RecordingConsumerState::Off;
+        StopCaptureIfUnused();
+        return {ControlCommandStatus::Failed, "capture-failed"};
     }
     recording_state_ = RecordingConsumerState::Running;
     return {ControlCommandStatus::Succeeded, "recording-started"};
@@ -110,12 +118,21 @@ ControlCommandResult CaptureControlEngine::StartReplay() {
 
     replay_state_ = ReplayConsumerState::Starting;
     replay_result_.reset();
+    if (!replay_consumer_) {
+        replay_consumer_ = std::make_unique<SynchronizedReplayConsumer>(capture_, replay_save_delay_ms_);
+    }
     capture_.SetReplayRetentionEnabled(true);
     if (!EnsureCaptureActive() || !ReconcileEncoderDemand()) {
         replay_state_ = ReplayConsumerState::Off;
         capture_.SetReplayRetentionEnabled(false);
         StopCaptureIfUnused();
-        return {ControlCommandStatus::Failed, "replay-infrastructure-start"};
+        return {ControlCommandStatus::Failed, "capture-failed"};
+    }
+    if (!capture_.running()) {
+        replay_state_ = ReplayConsumerState::Off;
+        capture_.SetReplayRetentionEnabled(false);
+        StopCaptureIfUnused();
+        return {ControlCommandStatus::Failed, "capture-failed"};
     }
     replay_state_ = ReplayConsumerState::Running;
     return {ControlCommandStatus::Succeeded, "replay-started"};
@@ -137,23 +154,28 @@ ControlCommandResult CaptureControlEngine::StopReplay() {
 
 ControlCommandResult CaptureControlEngine::SaveReplay(std::vector<std::filesystem::path> paths) {
     if (replay_state_ == ReplayConsumerState::Off) {
-        return Invalid("replay-off");
+        return Invalid("replay-not-active");
     }
     if (replay_state_ != ReplayConsumerState::Running && replay_state_ != ReplayConsumerState::Saving) {
         return Invalid("replay-not-running");
     }
     if (replay_state_ == ReplayConsumerState::Saving) {
-        return Invalid("replay-save-active");
+        return Invalid("save-already-active");
     }
     if (paths.size() != SelectedCaptureIds(CaptureConsumer::Replay).size() || paths.empty()) {
         return Invalid("replay-path-count");
+    }
+    if (capture_state_ == CaptureInfrastructureState::Failed || !capture_.running()) {
+        return {ControlCommandStatus::Failed, "capture-failed"};
     }
     if (!replay_consumer_) {
         replay_consumer_ = std::make_unique<SynchronizedReplayConsumer>(capture_, replay_save_delay_ms_);
     }
     if (!replay_consumer_->RequestSave(std::move(paths), configuration_.replay_duration_ns,
                                        SelectedCaptureIds(CaptureConsumer::Replay))) {
-        return {ControlCommandStatus::Failed, "replay-save-rejected"};
+        const std::string reason = replay_consumer_->last_request_error();
+        return {ControlCommandStatus::Failed,
+                reason.empty() ? "replay-save-rejected:snapshot-rejected" : "replay-save-rejected:" + reason};
     }
     replay_state_ = ReplayConsumerState::Saving;
     return {ControlCommandStatus::Succeeded, "replay-save-started"};
