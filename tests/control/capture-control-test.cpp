@@ -47,7 +47,7 @@ CaptureConfiguration Configuration(const StreamParticipationMode master, const S
                                    const StreamParticipationMode scene_b) {
     CaptureConfiguration configuration;
     configuration.replay.enabled = true;
-    configuration.replay.target_duration_ns = 8'000'000'000ULL;
+    configuration.replay.target_duration_ns = 1;
     configuration.replay.memory_budget_bytes = 1024 * 1024;
     configuration.streams = {{StreamIdentity::Master, "master", master, StreamConfig()},
                              {StreamIdentity::SceneA, "scene_a", scene_a, StreamConfig()},
