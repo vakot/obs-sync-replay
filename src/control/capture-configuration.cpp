@@ -36,16 +36,8 @@ const char* StreamParticipationModeName(const StreamParticipationMode mode) noex
     return "unknown";
 }
 
-const char* StreamIdentityName(const StreamIdentity identity) noexcept {
-    switch (identity) {
-    case StreamIdentity::Master:
-        return "master";
-    case StreamIdentity::SceneA:
-        return "scene_a";
-    case StreamIdentity::SceneB:
-        return "scene_b";
-    }
-    return "unknown";
+std::string StreamIdentityName(const StreamIdentity& identity) {
+    return StreamIdentityLabel(identity);
 }
 
 std::vector<size_t> SelectedStreamIndexes(const CaptureConfiguration& configuration,

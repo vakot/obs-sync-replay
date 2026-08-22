@@ -67,6 +67,7 @@ CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent,
     refresh_timer_ = new QTimer(this);
     refresh_timer_->setInterval(250);
     QObject::connect(refresh_timer_, &QTimer::timeout, this, [this] {
+        (void)runtime_.RefreshSceneTopology();
         (void)runtime_.RefreshReplayConfiguration();
         if (controls_adapter_) {
             (void)controls_adapter_->Reconcile(*this);

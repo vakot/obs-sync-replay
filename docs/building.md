@@ -1,9 +1,10 @@
 # Build and Development Environment
 
 OBS Sync Replay is a Windows x64 native OBS module built with CMake and MSVC. The
-current research runtime includes deterministic post-startup scene bootstrap and
-plugin-owned Recording/Replay controls. Capture output and synchronization remain
-validated through the shared control engine and portable runtime workflow.
+product runtime discovers the active OBS scene collection through public libobs
+APIs and owns the synchronized Recording/Replay controls. Capture output and
+synchronization remain validated through the shared control engine and portable
+runtime workflow.
 
 ## Pinned OBS Development Baseline
 
@@ -149,17 +150,18 @@ ColorSpace=709   ColorRange=Partial
 The clean-runtime `user.ini` selects the generated profile and sets only
 `General/FirstRun=true` to prevent first-run sources. OBS's normal startup then
 activates its empty scene collection and initializes the video pipeline from the
-generated profile. The plugin waits for the frontend finished-loading event after
-that activation, verifies the observed 1920x1080 at 60/1 configuration, removes
-stock OBS's sole empty placeholder scene, rechecks zero remaining input/scene
-sources, and creates two `color_source` inputs in `Sync Research Scene A` and
-`Sync Research Scene B`. No hardware or
-existing source name is required.
+generated profile. The plugin waits for the frontend finished-loading event, checks
+the observed 1920x1080 at 60/1 configuration, and discovers whatever real scenes
+are present through `obs_enum_scenes()`. It does not create test scenes or use
+scene names as identity.
 
-The launcher and plugin log every reset, profile creation, source check, scene/source
-creation, video check, and coordinator start. A run is invalid if the plugin emits a
-`[sync-bootstrap] ... failed` line or never emits the empty-placeholder cleanup,
-`clean-source-check` with zero counts, and `complete`.
+For topology acceptance, create at least four ordinary scenes in the portable
+collection after startup, or open a prepared collection, and use the `[topology]`
+log records described in [`scene-topology.md`](scene-topology.md). The clean
+launcher and plugin log every reset, profile creation, video check, discovery,
+epoch snapshot, staged update, and coordinated shutdown. A run is invalid if
+topology discovery fails, a source has no public UUID, the active epoch changes
+participant membership, or a topology update starts an encoder while idle.
 
 For a complete Debug iteration:
 

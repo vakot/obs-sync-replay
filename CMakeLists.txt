@@ -17,6 +17,10 @@ add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.c
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(obs-sync-replay-topology STATIC src/topology/scene-topology.cpp)
+target_compile_features(obs-sync-replay-topology PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-topology PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 add_library(obs-sync-replay-rendering-coordination STATIC src/rendering/scene-render-pair-tracker.cpp)
 target_link_libraries(obs-sync-replay-rendering-coordination PUBLIC obs-sync-replay-timeline)
 target_compile_features(obs-sync-replay-rendering-coordination PUBLIC cxx_std_17)
@@ -58,6 +62,7 @@ add_library(
   src/control/capture-control.cpp
 )
 target_link_libraries(obs-sync-replay-control PUBLIC obs-sync-replay-capture obs-sync-replay-replay)
+target_link_libraries(obs-sync-replay-control PUBLIC obs-sync-replay-topology)
 target_compile_features(obs-sync-replay-control PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
@@ -85,10 +90,10 @@ target_include_directories(obs-sync-replay-pipeline PUBLIC "${CMAKE_CURRENT_SOUR
 add_library(
   obs-sync-replay
   MODULE
-  src/bootstrap/deterministic-test-environment.cpp
   src/config/obs-replay-configuration.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
   src/control/plugin-capture-runtime.cpp
+  src/topology/obs-scene-topology.cpp
   src/plugin/plugin-main.cpp
   src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
@@ -125,6 +130,7 @@ target_link_libraries(
 
 if(MSVC)
   target_compile_options(obs-sync-replay-timeline PRIVATE /W4 /permissive- /Zc:__cplusplus)
+  target_compile_options(obs-sync-replay-topology PRIVATE /W4 /permissive- /Zc:__cplusplus)
   target_compile_options(obs-sync-replay-pipeline PRIVATE /W4 /permissive- /Zc:__cplusplus)
   target_compile_options(
     obs-sync-replay
@@ -153,6 +159,14 @@ if(MSVC)
   target_compile_options(master-frame-timeline-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME master-frame-timeline COMMAND master-frame-timeline-test)
+
+add_executable(scene-topology-test tests/topology/scene-topology-test.cpp)
+target_link_libraries(scene-topology-test PRIVATE obs-sync-replay-topology)
+target_compile_features(scene-topology-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(scene-topology-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME scene-topology COMMAND scene-topology-test)
 
 add_executable(replay-configuration-test tests/config/replay-configuration-test.cpp)
 target_link_libraries(replay-configuration-test PRIVATE obs-sync-replay-control)

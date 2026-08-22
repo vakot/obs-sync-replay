@@ -49,9 +49,9 @@ CaptureConfiguration Configuration(const StreamParticipationMode master, const S
     configuration.replay.enabled = true;
     configuration.replay.target_duration_ns = 1;
     configuration.replay.memory_budget_bytes = 1024 * 1024;
-    configuration.streams = {{StreamIdentity::Master, "master", master, StreamConfig()},
-                             {StreamIdentity::SceneA, "scene_a", scene_a, StreamConfig()},
-                             {StreamIdentity::SceneB, "scene_b", scene_b, StreamConfig()}};
+    configuration.streams = {{StreamIdentity::Master(), "master", master, StreamConfig()},
+                             {StreamIdentity::Scene("scene-a-uuid"), "scene_a", scene_a, StreamConfig()},
+                             {StreamIdentity::Scene("scene-b-uuid"), "scene_b", scene_b, StreamConfig()}};
     return configuration;
 }
 

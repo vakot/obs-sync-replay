@@ -4,7 +4,6 @@
 
 #include <QtWidgets/QWidget>
 
-#include "bootstrap/deterministic-test-environment.hpp"
 #include "control/plugin-capture-runtime.hpp"
 #include "ui/capture-controls.hpp"
 #include "ui/obs-controls-adapter.hpp"
@@ -15,7 +14,6 @@
 
 namespace {
 
-std::unique_ptr<obs_sync_replay::DeterministicTestEnvironment> deterministic_test_environment;
 std::unique_ptr<obs_sync_replay::PluginCaptureRuntime> capture_runtime;
 std::unique_ptr<obs_sync_replay::ObsControlsAdapter> controls_adapter;
 std::unique_ptr<obs_sync_replay::CaptureControls> capture_controls;
@@ -125,7 +123,7 @@ void UnregisterPluginHotkeys() {
 }
 
 void StopPluginOwnedRuntime(const char* boundary) {
-    if (!capture_runtime && !capture_controls && !controls_adapter && !deterministic_test_environment) {
+    if (!capture_runtime && !capture_controls && !controls_adapter) {
         return;
     }
     if (shutdown_requested.exchange(true, std::memory_order_acq_rel)) {
@@ -144,9 +142,6 @@ void StopPluginOwnedRuntime(const char* boundary) {
         capture_runtime->Stop();
     }
     capture_runtime.reset();
-    if (deterministic_test_environment) {
-        deterministic_test_environment.reset();
-    }
     blog(LOG_INFO, "[sync-shutdown] boundary=%s complete plugin-owned runtime stopped", boundary);
 }
 
@@ -156,15 +151,7 @@ void StartPluginOwnedRuntime() {
     }
     shutdown_requested.store(false, std::memory_order_release);
 
-    deterministic_test_environment = std::make_unique<obs_sync_replay::DeterministicTestEnvironment>();
-    if (!deterministic_test_environment->Setup()) {
-        deterministic_test_environment.reset();
-        blog(LOG_ERROR, "[obs-sync-replay] plugin-owned runtime disabled: research scenes unavailable");
-        return;
-    }
-
-    capture_runtime = std::make_unique<obs_sync_replay::PluginCaptureRuntime>(
-        obs_sync_replay::kResearchSceneAName, obs_sync_replay::kResearchSceneBName);
+    capture_runtime = std::make_unique<obs_sync_replay::PluginCaptureRuntime>();
     if (!capture_runtime->Initialize()) {
         blog(LOG_ERROR, "[obs-sync-replay] plugin-owned runtime initialization failed");
         capture_runtime.reset();
@@ -227,6 +214,14 @@ void OnFrontendEvent(enum obs_frontend_event event, void*) {
     if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGED) {
         if (capture_runtime) {
             LogCommand("profile-replay-config-refresh", capture_runtime->RefreshReplayConfiguration());
+        } else {
+            StartPluginOwnedRuntime();
+        }
+        return;
+    }
+    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED) {
+        if (capture_runtime) {
+            LogCommand("scene-topology-refresh", capture_runtime->RefreshSceneTopology());
         } else {
             StartPluginOwnedRuntime();
         }

@@ -453,8 +453,11 @@ to an explicitly configured portable OBS root with a portable-mode marker.
 ## Phase 7 Control and Configuration Layer
 
 Phase 7 adds an in-memory `CaptureConfiguration` over the Phase 6 shared capture
-session. The deterministic streams remain Master, Scene A, and Scene B, and each has
-one explicit participation mode: `Disabled`, `Recording`, `Replay`, or `Both`.
+session. Production topology is an explicit Master/Program stream followed by all
+eligible real scenes returned by public `obs_enum_scenes()` in collection order.
+Master has the special identity `master`; each scene is keyed by its public OBS
+source UUID and carries its display name separately. Each stream has one explicit
+participation mode: `Disabled`, `Recording`, `Replay`, or `Both`.
 Recording and Replay select their own configured stream subsets; a `Both` stream is
 still represented by one native OBS video encoder whose immutable packet is fanned
 out to both consumers.
@@ -495,8 +498,12 @@ The product runtime is plugin-owned and initializes idle after frontend loading.
 stock widgets are hidden and retained, never destroyed or used as backend state, and
 are restored on teardown. The replacement buttons and plugin-owned frontend hotkeys
 call the same `PluginCaptureRuntime` control methods; neither uses stock OBS
-Recording or Replay Buffer state, buttons, or handlers. The deterministic stream
-configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
+Recording or Replay Buffer state, buttons, or handlers. The runtime takes an
+immutable topology snapshot when the first consumer activates. Idle topology
+changes rebuild resources without starting encoders; active renames update
+metadata, while add/remove/order changes stage until both consumers are off. Scene
+source references are retained through an active epoch, and collection cleanup is
+an explicit coordinated shutdown boundary.
 
 The former scripted OBS development harness was removed from the product runtime;
 the control engine's deterministic unit tests remain the separate validation path.

@@ -20,7 +20,9 @@ with the copyable configure, build, portable deployment, and debugging workflow 
 - [`docs/building.md`](docs/building.md): Windows toolchain, build presets, portable
   OBS deployment, runtime validation, and debugging;
 - [`docs/research-runtime.md`](docs/research-runtime.md): clean stock-OBS research
-  runtime and deterministic synthetic scene bootstrap;
+  runtime and real-scene topology acceptance workflow;
+- [`docs/scene-topology.md`](docs/scene-topology.md): public OBS identity, ordering,
+  ownership, and active-epoch lifecycle;
 - [`docs/replay-configuration.md`](docs/replay-configuration.md): OBS Replay Buffer
   profile keys, availability policy, refresh lifecycle, and shared memory bound;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
