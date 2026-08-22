@@ -4,8 +4,8 @@ This branch's stock-OBS experiment starts from a clean `obs-dev` portable runtim
 The reproducible entry point is:
 
 ```powershell
-.\scripts\deploy-dev.ps1 -Configuration Debug
-.\scripts\run-obs-research.ps1
+.\scripts\build.ps1
+.\scripts\research.ps1
 ```
 
 Use `-SkipUpdateCheck` when the clean runtime should pass OBS's
@@ -18,7 +18,7 @@ harness is no longer part of the product module; control behavior is validated b
 the focused control/UI-state tests and by manual plugin interaction when desktop
 automation is available.
 
-`run-obs-research.ps1` refuses to modify a running portable OBS process. It clears
+`research.ps1` refuses to modify a running portable OBS process. It clears
 the runtime's `config` directory and the plugin data directory, then creates one
 temporary profile named `Sync Replay Research`. The profile is not an input to the
 experiment and is regenerated on every run.

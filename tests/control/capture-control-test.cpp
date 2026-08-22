@@ -46,7 +46,9 @@ EncodedPacket Packet(const uint64_t source_cts, const bool keyframe = false) {
 CaptureConfiguration Configuration(const StreamParticipationMode master, const StreamParticipationMode scene_a,
                                    const StreamParticipationMode scene_b) {
     CaptureConfiguration configuration;
-    configuration.replay_duration_ns = 1;
+    configuration.replay.enabled = true;
+    configuration.replay.target_duration_ns = 1;
+    configuration.replay.memory_budget_bytes = 1024 * 1024;
     configuration.streams = {{StreamIdentity::Master, "master", master, StreamConfig()},
                              {StreamIdentity::SceneA, "scene_a", scene_a, StreamConfig()},
                              {StreamIdentity::SceneB, "scene_b", scene_b, StreamConfig()}};
@@ -200,11 +202,41 @@ void TestMixedModesAndInvalidCommands() {
     Require(disabled_engine.StopRecording().ok(), "stop disabled test recording");
 }
 
+void TestReplayConfigurationLifecycle() {
+    CaptureConfiguration configuration = Configuration(StreamParticipationMode::Both, StreamParticipationMode::Both,
+                                                       StreamParticipationMode::Both);
+    SynchronizedCaptureSession capture;
+    FakeEncoderController encoders;
+    CaptureControlEngine engine(configuration, capture, encoders);
+    Require(engine.Initialize(), "initialize replay configuration engine");
+    Require(engine.StartReplay().ok(), "configured replay must start");
+    Require(engine.StartRecording(Paths("config-recording", 3)).ok(), "recording must overlap replay");
+
+    ReplayConfiguration disabled = configuration.replay;
+    disabled.enabled = false;
+    Require(engine.ApplyReplayConfiguration(disabled).ok(), "disabling replay configuration must succeed");
+    Require(!engine.replay_available() && engine.replay_state() == ReplayConsumerState::Off,
+            "disabling replay must stop replay and reject availability");
+    Require(engine.recording_state() == RecordingConsumerState::Running && engine.active_encoder_count() == 3,
+            "disabling replay must not stop recording or its encoders");
+    Require(engine.StartReplay().status == ControlCommandStatus::InvalidState,
+            "disabled replay must reject start");
+    Require(engine.SaveReplay(Paths("disabled-save", 3)).status == ControlCommandStatus::InvalidState,
+            "disabled replay must reject save");
+
+    disabled.enabled = true;
+    Require(engine.ApplyReplayConfiguration(disabled).ok(), "reenabling replay configuration must succeed");
+    Require(engine.replay_state() == ReplayConsumerState::Off, "reenabling replay must not auto-start it");
+    Require(engine.StartReplay().ok(), "reenabled replay must start on explicit command");
+    Require(engine.StopReplay().ok() && engine.StopRecording().ok(), "configured replay lifecycle must stop cleanly");
+}
+
 } // namespace
 
 int main() {
     TestModeSemantics();
     TestHandoffAndEncoderOwnership();
     TestMixedModesAndInvalidCommands();
+    TestReplayConfigurationLifecycle();
     return EXIT_SUCCESS;
 }

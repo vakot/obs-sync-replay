@@ -5,13 +5,12 @@ separately rendered scenes as two MKV replay files on one shared video timeline.
 Frame-perfect pairing is the product: two independently started replay outputs are
 not an acceptable architecture.
 
-The supported MVP platform is Windows x64 with OBS Studio 32.2.1. Start development
+The supported platform is Windows x64 with OBS Studio 32.2.1. Start development
 with the copyable configure, build, portable deployment, and debugging workflow in
 [`docs/building.md`](docs/building.md).
 
 ## Project Documents
 
-- [`mvp-plan.md`](mvp-plan.md): product scope, phases, and final acceptance model;
 - [`AGENTS.md`](AGENTS.md): repository-wide implementation rules and definition of
   done;
 - [`docs/architecture.md`](docs/architecture.md): timing model, conceptual modules,
@@ -22,6 +21,8 @@ with the copyable configure, build, portable deployment, and debugging workflow 
   OBS deployment, runtime validation, and debugging;
 - [`docs/research-runtime.md`](docs/research-runtime.md): clean stock-OBS research
   runtime and deterministic synthetic scene bootstrap;
+- [`docs/replay-configuration.md`](docs/replay-configuration.md): OBS Replay Buffer
+  profile keys, availability policy, refresh lifecycle, and shared memory bound;
 - [`docs/git-workflow.md`](docs/git-workflow.md): mandatory branch, commit, pull
   request, and squash-merge conventions.
 
@@ -34,4 +35,5 @@ ONE MASTER VIDEO TIMELINE
 ```
 
 Both frames must carry the same master-frame identity and PTS. Replay boundaries are
-chosen once for the pair. See `mvp-plan.md` for the complete MVP definition.
+chosen once for the pair. See the architecture and testing documents for the
+synchronization contract and acceptance evidence.

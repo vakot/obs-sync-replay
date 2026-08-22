@@ -43,7 +43,7 @@ Run paired saves at these minimum durations:
 | --- | --- | --- |
 | 60 seconds | Fast regression | Equal bounds/counts and zero offset |
 | 5 minutes | Repeated-save and moderate-run check | Zero accumulating drift |
-| 30 minutes | MVP endurance acceptance | Zero accumulating drift across multiple arbitrary saves |
+| 30 minutes | Endurance acceptance | Zero accumulating drift across multiple arbitrary saves |
 
 No test may accept accumulating drift as "close enough." A mismatch of one temporal
 slot is a synchronization failure, even if total durations are similar.
@@ -184,8 +184,8 @@ affected contract:
   or state transition is affected.
 
 A synchronization-critical task is not done until the relevant invariant is observed
-passing and any new failure mode is visible in diagnostics. The MVP is not done until
-the 30-minute scenario in `mvp-plan.md` passes with multiple arbitrary replay saves
+passing and any new failure mode is visible in diagnostics. The product is not complete until
+the 30-minute scenario passes with multiple arbitrary replay saves
 and zero frame-offset divergence.
 
 ## Bootstrap Validation
@@ -207,7 +207,7 @@ integration only and are not synchronization evidence.
 ## Clean Runtime Bootstrap Validation
 
 The stock-OBS research experiment must be launched with
-`scripts/run-obs-research.ps1` after deployment. The launcher resets the configured
+`scripts/research.ps1` after `scripts/build.ps1`. The launcher resets the configured
 portable runtime and generates only the documented `Sync Replay Research` profile
 video keys; it must not be replaced with manual UI setup or a prior Phase 1–7 runtime.
 
@@ -242,7 +242,13 @@ recording output, replay-buffer configuration, or existing scene/source name.
 idempotent and invalid commands, Recording/Replay handoff in both directions,
 mixed Master/Scene A/Scene B modes, disabled streams, total-idle release, and fresh
 capture-epoch creation. The test also verifies that Recording-only capture does not
-retain replay packets.
+retain replay packets, that unavailable replay rejects Start/Save, that disabling
+replay stops only the replay consumer, and that re-enabling does not auto-start it.
+
+`replay-configuration-test` covers the OBS default duration/memory conversion,
+enabled configuration, unsupported stock backends, and the explicit emergency
+bound for stock-unlimited modes. `synchronized-capture-session-test` covers the
+global shared packet budget, common-keyframe eviction, and live capacity updates.
 
 For the default `both,both,both` configuration, control tests must show three active
 video encoders during Recording-only, Replay-only, and concurrent operation;
@@ -255,12 +261,21 @@ participating stream.
 ### Phase 7 plugin-owned UI validation
 
 The product plugin must load with Recording and Replay inactive and zero active
-plugin-owned video encoders. The UI adapter locates `controlsDock` and replaces the
+plugin-owned video encoders. With OBS Replay Buffer disabled or unsupported, Replay
+and Save Replay are hidden while Recording remains visible. The UI adapter locates
+`controlsDock` and replaces the
 native `recordButton`, `replayBufferButton`, and `saveReplayButton` layout entries
-with plugin-owned controls at the same positions. Labels and enabled state are
-derived only from `CaptureControlEngine` state. Plugin frontend hotkeys invoke the
+with plugin-owned controls at the same positions. Labels, visibility, and enabled
+state are derived from the translated active OBS profile and
+`CaptureControlEngine` state. Plugin frontend hotkeys invoke the
 same runtime toggle/save methods as the controls. Stock OBS Recording and Replay
 Buffer buttons and lifecycle events are not used as product state.
+
+Change the profile's Replay Buffer setting and confirm the plugin refreshes it
+without starting replay. A disable while replay is active must stop replay and
+leave Recording running; a later enable must expose controls without auto-starting.
+The profile-key and transition contract is in
+[`replay-configuration.md`](replay-configuration.md).
 
 On shutdown, plugin controls are disabled before both consumers are stopped, replay
 saves are joined, encoders reach zero, hotkeys are unregistered, and the native

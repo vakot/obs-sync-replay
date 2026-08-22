@@ -35,7 +35,8 @@ void Require(const bool condition, const char* const message) {
 void TestIdlePresentation() {
     const CaptureControlsLabels labels = LocalizedLabels();
     const CaptureControlsPresentation presentation = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, false, false, labels);
+        CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, true, false, false,
+        labels);
     Require(presentation.recording.state == CaptureControlVisualState::Inactive, "idle recording state");
     Require(!CaptureControlUsesNativeActiveStyle(presentation.recording.state),
             "inactive recording must not use active styling");
@@ -51,8 +52,8 @@ void TestIdlePresentation() {
 void TestTransitionsAndSave() {
     const CaptureControlsLabels labels = LocalizedLabels();
     const CaptureControlsPresentation starting = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Active, RecordingConsumerState::Starting, ReplayConsumerState::Starting, false, false,
-        labels);
+        CaptureInfrastructureState::Active, RecordingConsumerState::Starting, ReplayConsumerState::Starting, true, false,
+        false, labels);
     Require(starting.recording.state == CaptureControlVisualState::Starting && !starting.recording.enabled,
             "recording start transition must disable the button");
     Require(starting.recording.text == labels.starting_recording, "recording transition label must be localized");
@@ -61,8 +62,8 @@ void TestTransitionsAndSave() {
     Require(starting.replay.text == labels.starting_replay_buffer, "replay transition label must be localized");
 
     const CaptureControlsPresentation active = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Running, false, false,
-        labels);
+        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Running, true, false,
+        false, labels);
     Require(active.recording.text == labels.stop_recording && active.recording.enabled, "active recording button");
     Require(active.replay.text == labels.stop_replay_buffer && active.replay.enabled, "active replay button");
     Require(CaptureControlUsesNativeActiveStyle(active.recording.state) &&
@@ -70,10 +71,12 @@ void TestTransitionsAndSave() {
             "recording and replay must activate independently");
     Require(active.save_replay_visible, "save must be visible while replay is active");
     Require(active.save_replay_enabled, "save must be enabled while replay is active");
+    Require(active.save_replay_text == labels.save_replay,
+            "active save control must retain its localized accessibility label");
 
     const CaptureControlsPresentation saving = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Saving, false, false,
-        labels);
+        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Saving, true, false,
+        false, labels);
     Require(saving.replay.state == CaptureControlVisualState::Saving && !saving.replay.enabled,
             "saving must disable replay toggle");
     Require(saving.replay.text == labels.stop_replay_buffer, "replay save must keep the stop label");
@@ -83,8 +86,8 @@ void TestTransitionsAndSave() {
     Require(!saving.save_replay_enabled, "saving must prevent duplicate save");
 
     const CaptureControlsPresentation stopping = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Stopping, false, false,
-        labels);
+        CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Stopping, true, false,
+        false, labels);
     Require(stopping.save_replay_visible && !stopping.save_replay_enabled,
             "stopping must retain but disable the save control until replay stops");
     Require(CaptureControlUsesNativeActiveStyle(stopping.replay.state),
@@ -94,7 +97,8 @@ void TestTransitionsAndSave() {
 void TestFailurePresentation() {
     const CaptureControlsLabels labels = LocalizedLabels();
     const CaptureControlsPresentation failed = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Failed, RecordingConsumerState::Off, ReplayConsumerState::Off, false, false, labels);
+        CaptureInfrastructureState::Failed, RecordingConsumerState::Off, ReplayConsumerState::Off, true, false, false,
+        labels);
     Require(failed.recording.state == CaptureControlVisualState::Failed && !failed.recording.enabled,
             "infrastructure failure must disable recording");
     Require(failed.recording.text == labels.recording_unavailable, "recording failure must use plugin localization");
@@ -103,7 +107,7 @@ void TestFailurePresentation() {
     Require(failed.replay.text == labels.replay_buffer_unavailable, "replay failure must use plugin localization");
 
     const CaptureControlsPresentation command_failed = MakeCaptureControlsPresentation(
-        CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, false, true, labels);
+        CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, true, false, true, labels);
     Require(command_failed.replay.state == CaptureControlVisualState::Failed && !command_failed.replay.enabled,
             "replay command failure must be visible in replay control state");
     Require(!command_failed.save_replay_visible && !command_failed.save_replay_enabled,
@@ -173,6 +177,17 @@ void TestObsAndPluginLookupKeys() {
             "plugin-only transitions must use plugin lookup keys");
 }
 
+void TestDisabledReplayPresentation() {
+    const CaptureControlsLabels labels = LocalizedLabels();
+    const CaptureControlsPresentation presentation = MakeCaptureControlsPresentation(
+        CaptureInfrastructureState::Idle, RecordingConsumerState::Off, ReplayConsumerState::Off, false, false, false,
+        labels);
+    Require(!presentation.replay.visible && !presentation.replay.enabled && !presentation.save_replay_enabled,
+            "disabled replay configuration must hide replay controls");
+    Require(presentation.recording.visible && presentation.recording.enabled,
+            "disabled replay configuration must not affect recording");
+}
+
 } // namespace
 
 int main() {
@@ -181,5 +196,6 @@ int main() {
     TestFailurePresentation();
     TestLookupFallbacks();
     TestObsAndPluginLookupKeys();
+    TestDisabledReplayPresentation();
     return EXIT_SUCCESS;
 }

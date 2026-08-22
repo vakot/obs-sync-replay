@@ -1,8 +1,7 @@
 # Architecture
 
-This document turns the product model in [`../mvp-plan.md`](../mvp-plan.md) into
-implementation boundaries, source organization, and architectural decisions that
-protect synchronization invariants.
+This document defines implementation boundaries, source organization, and
+architectural decisions that protect synchronization invariants.
 
 ## Synchronization Contract
 
@@ -35,8 +34,8 @@ position alone, or elapsed wall-clock time.
 ## Guarantee Boundary
 
 OBS sources and capture devices may have different exposure, buffering, transport,
-decode, or source-frame latencies before the plugin renders them. Those upstream
-latencies are visible content and are outside the MVP guarantee.
+ decode, or source-frame latencies before the plugin renders them. Those upstream
+ latencies are visible content and are outside the synchronization guarantee.
 
 The guarantee begins when the plugin selects a shared master video tick. From that
 point onward, both scene renderings, encoder submissions, replay selection, and muxed
@@ -372,7 +371,7 @@ of temporal identity may not be.
 
 ## Scope and Evolution
 
-The MVP has exactly two outputs at one FPS. Prefer clear A/B types or a fixed-size
+The product has exactly two outputs at one FPS. Prefer clear A/B types or a fixed-size
 two-output representation over a speculative arbitrary-output framework. New
 abstractions are justified only by current behavior, testing, ownership, or safety.
 
@@ -501,9 +500,13 @@ configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
 
 The former scripted OBS development harness was removed from the product runtime;
 the control engine's deterministic unit tests remain the separate validation path.
-Persistent settings, final per-scene configuration, audio, and Replay visibility based
-on the OBS Replay Buffer setting remain deferred. Native control lookup is isolated in
-the adapter because its object names and layout structure are OBS-version-sensitive.
+The plugin now consumes the active profile's public OBS Replay Buffer settings for
+availability, shared duration, and shared memory policy. It never starts or uses
+the stock replay output. Exact Simple/Advanced keys, unsupported encoder modes,
+refresh boundaries, the active-disable transition, and the emergency bound are
+documented in [`replay-configuration.md`](replay-configuration.md). Native control
+lookup remains isolated in the adapter because its object names and layout
+structure are OBS-version-sensitive.
 
 The product idle invariant is checked at load: before any explicit UI or hotkey
 action, Recording and Replay are Off and the plugin-owned active encoder count is

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-  [string]$ObsDevRoot
+  [string]$ObsDevRoot,
+  [switch]$Wait,
+  [switch]$SkipUpdateCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,16 +11,7 @@ Set-StrictMode -Version Latest
 
 $portableRoot = Resolve-ObsDevRoot -ConfiguredRoot $ObsDevRoot
 $obsExecutable = Join-Path $portableRoot 'bin\64bit\obs64.exe'
-$portableRootFull = [System.IO.Path]::GetFullPath($portableRoot).TrimEnd('\')
-
-Get-CimInstance Win32_Process -Filter "Name = 'obs64.exe'" | ForEach-Object {
-  if ($_.ExecutablePath) {
-    $processPath = [System.IO.Path]::GetFullPath($_.ExecutablePath).TrimEnd('\')
-    if ($processPath -ieq $obsExecutable) {
-      throw "Cannot reset the research runtime while portable OBS is running (PID $($_.ProcessId)). Close that process normally first."
-    }
-  }
-}
+Assert-PortableObsStopped -ObsExecutable $obsExecutable
 
 $configDirectory = Join-Path $portableRoot 'config'
 if (Test-Path -LiteralPath $configDirectory) {
@@ -73,6 +66,10 @@ $profileConfigPath = Join-Path $profileDirectory 'basic.ini'
 
 Write-Host "Created clean OBS user config: $userConfigPath"
 Write-Host "Created research video profile: $profileConfigPath"
-Write-Host "Research profile values: base/output=1920x1080 fps=60/1 format=NV12 colorspace=709 range=Partial"
-Write-Host "No scene collection, recording output, replay buffer, or plugin state was created by this preflight."
-Write-Host "Prepared portable OBS root: $portableRootFull"
+Write-Host 'Research profile values: base/output=1920x1080 fps=60/1 format=NV12 colorspace=709 range=Partial'
+Write-Host 'No scene collection, recording output, replay buffer, or plugin state was created by this preflight.'
+
+$process = Start-PortableObs -PortableRoot $portableRoot -ProfileName $profileName `
+  -Wait:$Wait -SkipUpdateCheck:$SkipUpdateCheck
+Write-Host "Research profile started: $profileName"
+$process

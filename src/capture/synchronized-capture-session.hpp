@@ -74,6 +74,7 @@ class SynchronizedCaptureSession final {
 
     bool Start();
     bool Ingest(CaptureStreamId stream_id, EncodedPacket packet, std::vector<uint8_t> codec_extra_data = {});
+    void SetRingCapacityBytes(size_t capacity_bytes) noexcept;
     void SetReplayRetentionEnabled(bool enabled) noexcept;
     void Stop() noexcept;
 

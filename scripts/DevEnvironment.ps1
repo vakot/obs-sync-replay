@@ -56,3 +56,51 @@ function Resolve-ObsDevRoot {
 
   return $resolvedRoot
 }
+
+function Assert-PortableObsStopped {
+  param([Parameter(Mandatory)][string]$ObsExecutable)
+
+  $expectedPath = [System.IO.Path]::GetFullPath($ObsExecutable).TrimEnd('\')
+  Get-CimInstance Win32_Process -Filter "Name = 'obs64.exe'" | ForEach-Object {
+    if ([string]::IsNullOrWhiteSpace($_.ExecutablePath)) {
+      return
+    }
+
+    $processPath = [System.IO.Path]::GetFullPath($_.ExecutablePath).TrimEnd('\')
+    if ($processPath -ieq $expectedPath) {
+      throw "Portable OBS is already running (PID $($_.ProcessId)). Close that instance normally first."
+    }
+  }
+}
+
+function Start-PortableObs {
+  param(
+    [Parameter(Mandatory)][string]$PortableRoot,
+    [string]$ProfileName,
+    [switch]$Wait,
+    [switch]$SkipUpdateCheck
+  )
+
+  $obsExecutable = Join-Path $PortableRoot 'bin\64bit\obs64.exe'
+  Assert-PortableObsStopped -ObsExecutable $obsExecutable
+
+  $workingDirectory = Split-Path -Parent $obsExecutable
+  $arguments = @('--portable', '--multi')
+  if (-not [string]::IsNullOrWhiteSpace($ProfileName)) {
+    $arguments += @('--profile', $ProfileName)
+  }
+  if ($SkipUpdateCheck) {
+    $arguments += '--disable-updater'
+  }
+
+  $process = Start-Process -FilePath $obsExecutable -ArgumentList $arguments `
+    -WorkingDirectory $workingDirectory -PassThru
+  Write-Host "Started portable OBS PID $($process.Id): $obsExecutable"
+
+  if ($Wait) {
+    $process.WaitForExit()
+    Write-Host "Portable OBS PID $($process.Id) exited with code $($process.ExitCode)"
+  }
+
+  return $process
+}

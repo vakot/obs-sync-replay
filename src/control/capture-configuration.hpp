@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/replay-configuration.hpp"
 #include "capture/synchronized-capture-session.hpp"
 
 #include <cstddef>
@@ -35,8 +36,7 @@ struct ConfiguredStream final {
 };
 
 struct CaptureConfiguration final {
-    uint64_t replay_duration_ns = 8'000'000'000ULL;
-    size_t ring_capacity_bytes = 30 * 1024 * 1024;
+    ReplayConfiguration replay;
     std::vector<ConfiguredStream> streams;
 };
 

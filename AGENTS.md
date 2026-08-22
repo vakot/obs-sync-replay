@@ -9,12 +9,11 @@ genuinely different build, testing, or ownership rules.
 
 For every non-trivial task, read the documents relevant to the change:
 
-1. [`mvp-plan.md`](mvp-plan.md) -- product scope and roadmap (source of truth);
-2. [`docs/architecture.md`](docs/architecture.md) -- synchronization model and
+1. [`docs/architecture.md`](docs/architecture.md) -- synchronization model and
    architectural decisions;
-3. [`docs/testing.md`](docs/testing.md) -- required synchronization evidence;
-4. [`docs/building.md`](docs/building.md) -- intended Windows development environment;
-5. [`docs/git-workflow.md`](docs/git-workflow.md) -- mandatory Git and PR policy.
+2. [`docs/testing.md`](docs/testing.md) -- required synchronization evidence;
+3. [`docs/building.md`](docs/building.md) -- intended Windows development environment;
+4. [`docs/git-workflow.md`](docs/git-workflow.md) -- mandatory Git and PR policy.
 
 If documents conflict, preserve the stricter synchronization guarantee, stop before
 making a conflicting architectural assumption, and resolve the documentation in the
@@ -152,7 +151,7 @@ cannot satisfy the requirement and the tradeoff is documented.
 
 ## Scope Discipline
 
-The MVP targets Windows, OBS Studio, exactly two scenes at one FPS, separate MKV files,
+The product targets Windows, OBS Studio, exactly two scenes at one FPS, separate MKV files,
 NVENC H.264 where practical, configurable replay duration, one save action/hotkey,
 minimal configuration UI, and strong validation/logging. Video-only is acceptable
 until synchronization is proven; audio must never weaken it.
@@ -171,6 +170,6 @@ named and demonstrated valid, appropriate validation to pass, every new failure 
 to be explicit and diagnosable, and changed architectural assumptions to be
 documented. Compilation alone is insufficient.
 
-The MVP is done only when repeated paired saves and long-running tests show identical
+The product is complete only when repeated paired saves and long-running tests show identical
 master-frame ranges and temporal frame mapping with zero accumulating offset, as
-defined by [`docs/testing.md`](docs/testing.md) and `mvp-plan.md`.
+defined by [`docs/testing.md`](docs/testing.md).

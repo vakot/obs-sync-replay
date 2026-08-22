@@ -1,6 +1,7 @@
 #include "control/plugin-capture-runtime.hpp"
 
 #include "capture/synchronized-capture-session.hpp"
+#include "config/obs-replay-configuration.hpp"
 #include "control/capture-control.hpp"
 #include "recording/synchronized-recording-consumer.hpp"
 #include "replay/synchronized-replay-consumer.hpp"
@@ -383,17 +384,17 @@ class PluginEncoderController final : public EncoderController {
     }
 };
 
-SynchronizedCaptureConfig RuntimeCaptureConfig() {
+SynchronizedCaptureConfig RuntimeCaptureConfig(const ReplayConfiguration& replay_configuration) {
     SynchronizedCaptureConfig config;
-    config.ring_capacity_bytes = 30 * 1024 * 1024;
+    config.ring_capacity_bytes = replay_configuration.memory_budget_bytes;
     return config;
 }
 
 struct PluginCaptureRuntime::ControlState final {
-    ControlState(const char* encoder_id, const std::array<video_t *, 3>& scene_videos)
-        : capture(RuntimeCaptureConfig()), scene_videos(scene_videos) {
-        configuration.replay_duration_ns = 8'000'000'000ULL;
-        configuration.ring_capacity_bytes = 30 * 1024 * 1024;
+    ControlState(const char* encoder_id, const std::array<video_t *, 3>& scene_videos,
+                 const ReplayConfiguration& replay_configuration)
+        : capture(RuntimeCaptureConfig(replay_configuration)), scene_videos(scene_videos) {
+        configuration.replay = replay_configuration;
         configuration.streams = {
             {StreamIdentity::Master, "master", StreamParticipationMode::Both, StreamConfig(nullptr)},
             {StreamIdentity::SceneA, "scene_a", StreamParticipationMode::Both, StreamConfig(nullptr)},
@@ -456,7 +457,8 @@ const char* SelectPluginEncoder() {
 }
 
 PluginCaptureRuntime::PluginCaptureRuntime(std::string scene_a_name, std::string scene_b_name)
-    : scene_a_name_(std::move(scene_a_name)), scene_b_name_(std::move(scene_b_name)), state_(std::make_unique<State>()) {}
+    : scene_a_name_(std::move(scene_a_name)), scene_b_name_(std::move(scene_b_name)),
+      replay_configuration_(ReadObsReplayConfiguration()), state_(std::make_unique<State>()) {}
 
 PluginCaptureRuntime::~PluginCaptureRuntime() {
     Stop();
@@ -488,13 +490,19 @@ bool PluginCaptureRuntime::Initialize() {
     }
 
     const std::array<video_t *, 3> scene_videos{{obs_get_video(), state_->video_a, state_->video_b}};
-    control_state_ = std::make_unique<ControlState>(SelectPluginEncoder(), scene_videos);
+    control_state_ = std::make_unique<ControlState>(SelectPluginEncoder(), scene_videos, replay_configuration_);
     if (!control_state_->group || !control_state_->control || !control_state_->control->Initialize()) {
         blog(LOG_ERROR, "[plugin-control] setup-failed reason=control-engine-initialize");
         Stop();
         return false;
     }
 
+    blog(LOG_INFO,
+         "[plugin-config] source=obs-profile replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu "
+         "memory_limit_configured=%s status=applied reason=initial-profile-read",
+         replay_configuration_.enabled ? "true" : "false",
+         static_cast<unsigned long long>(replay_configuration_.target_duration_ns),
+         replay_configuration_.memory_budget_bytes, replay_configuration_.memory_limit_configured ? "true" : "false");
     blog(LOG_INFO, "[plugin-control] initialized idle=true active_encoder_count=0");
     return true;
 }
@@ -605,6 +613,7 @@ ControlCommandResult PluginCaptureRuntime::StopRecording() {
 }
 
 ControlCommandResult PluginCaptureRuntime::StartReplay() {
+    (void)RefreshReplayConfiguration();
     std::lock_guard<std::mutex> lock(mutex_);
     if (!control_state_ || !control_state_->control) {
         return Failed("runtime-not-initialized");
@@ -628,6 +637,7 @@ ControlCommandResult PluginCaptureRuntime::ToggleReplay() {
 }
 
 ControlCommandResult PluginCaptureRuntime::SaveReplay() {
+    (void)RefreshReplayConfiguration();
     std::lock_guard<std::mutex> lock(mutex_);
     if (!control_state_ || !control_state_->control) {
         return Failed("runtime-not-initialized");
@@ -648,6 +658,33 @@ ControlCommandResult PluginCaptureRuntime::StopReplay() {
         return Failed("runtime-not-initialized");
     }
     return control_state_->control->StopReplay();
+}
+
+ControlCommandResult PluginCaptureRuntime::ApplyReplayConfiguration(ReplayConfiguration configuration) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (replay_configuration_.enabled == configuration.enabled &&
+        replay_configuration_.target_duration_ns == configuration.target_duration_ns &&
+        replay_configuration_.memory_budget_bytes == configuration.memory_budget_bytes &&
+        replay_configuration_.memory_limit_configured == configuration.memory_limit_configured) {
+        return {ControlCommandStatus::NoOp, "replay-config-unchanged"};
+    }
+    replay_configuration_ = configuration;
+    if (!control_state_ || !control_state_->control) {
+        return {ControlCommandStatus::Succeeded, "replay-config-stored"};
+    }
+    const ControlCommandResult result = control_state_->control->ApplyReplayConfiguration(configuration);
+    blog(result.ok() ? LOG_INFO : LOG_ERROR,
+         "[plugin-config] replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu memory_limit_configured=%s "
+         "status=%s reason=%s",
+         configuration.enabled ? "true" : "false",
+         static_cast<unsigned long long>(configuration.target_duration_ns), configuration.memory_budget_bytes,
+         configuration.memory_limit_configured ? "true" : "false", ControlCommandStatusName(result.status),
+         result.reason.c_str());
+    return result;
+}
+
+ControlCommandResult PluginCaptureRuntime::RefreshReplayConfiguration() {
+    return ApplyReplayConfiguration(ReadObsReplayConfiguration());
 }
 
 void PluginCaptureRuntime::PollReplaySave() noexcept {
@@ -690,6 +727,12 @@ ReplayConsumerState PluginCaptureRuntime::replay_state() const noexcept {
 size_t PluginCaptureRuntime::active_encoder_count() const noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     return control_state_ && control_state_->control ? control_state_->control->active_encoder_count() : 0;
+}
+
+bool PluginCaptureRuntime::replay_available() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return control_state_ && control_state_->control ? control_state_->control->replay_available()
+                                                      : replay_configuration_.enabled;
 }
 
 } // namespace obs_sync_replay

@@ -2,6 +2,7 @@
 
 #include "control/plugin-capture-runtime.hpp"
 #include "ui/capture-controls-state.hpp"
+#include "ui/obs-controls-adapter.hpp"
 
 #include <QtCore/QTimer>
 #include <QtWidgets/QLabel>
@@ -41,13 +42,17 @@ void SetButtonClasses(QPushButton* button, const CaptureControlVisualState state
 
 } // namespace
 
-CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent) : QObject(parent), runtime_(runtime) {
+CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent, ObsControlsAdapter* controls_adapter)
+    : QObject(parent), runtime_(runtime), controls_adapter_(controls_adapter) {
     recording_button_ = new QPushButton(parent);
     recording_button_->setObjectName(QStringLiteral("obsSyncReplayRecordingButton"));
+    recording_button_->setProperty("obsSyncReplayPluginControl", true);
     replay_button_ = new QPushButton(parent);
     replay_button_->setObjectName(QStringLiteral("obsSyncReplayReplayButton"));
+    replay_button_->setProperty("obsSyncReplayPluginControl", true);
     save_replay_button_ = new QPushButton(parent);
     save_replay_button_->setObjectName(QStringLiteral("obsSyncReplaySaveButton"));
+    save_replay_button_->setProperty("obsSyncReplayPluginControl", true);
     save_replay_button_->setVisible(false);
 
     status_ = new QLabel(parent);
@@ -61,6 +66,10 @@ CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent)
     refresh_timer_ = new QTimer(this);
     refresh_timer_->setInterval(250);
     QObject::connect(refresh_timer_, &QTimer::timeout, this, [this] {
+        (void)runtime_.RefreshReplayConfiguration();
+        if (controls_adapter_) {
+            (void)controls_adapter_->Reconcile(*this);
+        }
         runtime_.PollReplaySave();
         ApplyPresentationSafely();
     });
@@ -159,9 +168,10 @@ void CaptureControls::ApplyPresentation() {
     const CaptureInfrastructureState capture_state = runtime_.capture_state();
     const RecordingConsumerState recording_state = runtime_.recording_state();
     const ReplayConsumerState replay_state = runtime_.replay_state();
+    const bool replay_available = runtime_.replay_available();
     const CaptureControlsLabels labels = ResolveCaptureControlsLabels();
     const CaptureControlsPresentation presentation = MakeCaptureControlsPresentation(
-        capture_state, recording_state, replay_state, recording_failed_, replay_failed_, labels);
+        capture_state, recording_state, replay_state, replay_available, recording_failed_, replay_failed_, labels);
     const auto to_qstring = [](const std::string& value) {
         return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
     };
@@ -177,6 +187,9 @@ void CaptureControls::ApplyPresentation() {
 
     save_replay_button_->setEnabled(presentation.save_replay_enabled);
     save_replay_button_->setVisible(presentation.save_replay_visible);
+    save_replay_button_->setText(QString());
+    save_replay_button_->setToolTip(to_qstring(presentation.save_replay_text));
+    save_replay_button_->setAccessibleName(to_qstring(presentation.save_replay_text));
     SetButtonClasses(save_replay_button_, CaptureControlVisualState::Inactive);
 }
 

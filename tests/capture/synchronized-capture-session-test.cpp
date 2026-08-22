@@ -91,18 +91,31 @@ void TestTemporarilyAheadStreamAndInsufficientHistory() {
 }
 
 void TestKeyframeAndGopSafeEviction() {
-    auto session = MakeSession(6);
+    // Packets arrive one stream at a time, so the fixture leaves room for the
+    // transient fan-in head while still exercising one shared capacity bound.
+    auto session = MakeSession(27);
     IngestAll(*session, 100, true);
     IngestAll(*session, 110);
     IngestAll(*session, 120);
     IngestAll(*session, 130, true);
     IngestAll(*session, 140);
     const auto metrics = session->metrics();
-    Require(metrics.evicted_packet_count > 0 && metrics.retained_bytes <= 18,
-            "ring eviction must remain bounded");
+    Require(metrics.evicted_packet_count > 0 && metrics.retained_bytes <= 27,
+            "ring eviction must remain globally bounded");
     const auto snapshot = session->SnapshotCommonRange(1);
     Require(snapshot && snapshot->range.start_cts == 130,
             "oldest retained replay history must begin at a common keyframe");
+}
+
+void TestCapacityUpdateEvictsSharedHistory() {
+    auto session = MakeSession(1024);
+    IngestAll(*session, 100, true);
+    IngestAll(*session, 110);
+    IngestAll(*session, 120);
+    session->SetRingCapacityBytes(6);
+    const auto metrics = session->metrics();
+    Require(metrics.retained_bytes <= 6, "runtime capacity update must bound the shared replay history");
+    Require(!session->SnapshotCommonRange(1), "capacity update must not fabricate a replay range");
 }
 
 void TestSnapshotOwnershipAndFanout() {
@@ -136,6 +149,7 @@ int main() {
     TestN3CommonRangeAndWatermark();
     TestTemporarilyAheadStreamAndInsufficientHistory();
     TestKeyframeAndGopSafeEviction();
+    TestCapacityUpdateEvictsSharedHistory();
     TestSnapshotOwnershipAndFanout();
     TestNoCommonKeyframe();
     return EXIT_SUCCESS;

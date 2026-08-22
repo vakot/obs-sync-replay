@@ -83,21 +83,24 @@ The first configure downloads and prepares the pinned SDK in `.deps/`; later
 configures reuse it. Generated project files and binaries are placed beneath
 `build/windows-debug` and `build/windows-release`.
 
-## Deploy and Run Portable OBS
+## Build and Run Portable OBS
 
-Deploy Debug, then launch the explicitly configured portable executable:
+Build and deploy the current project state:
 
 ```powershell
-.\scripts\deploy-dev.ps1 -Configuration Debug
-.\scripts\run-obs-dev.ps1
+.\scripts\build.ps1
 ```
 
-Pass `-SkipUpdateCheck` to the launcher, or to `dev.ps1` when building and
-launching together, to pass OBS's public `--disable-updater` startup option:
+Create and start the fixed research profile:
 
 ```powershell
-.\scripts\run-obs-dev.ps1 -SkipUpdateCheck
-.\scripts\dev.ps1 -SkipUpdateCheck
+.\scripts\research.ps1 -SkipUpdateCheck
+```
+
+Once the profile exists, start it again without resetting manual settings:
+
+```powershell
+.\scripts\start.ps1 -SkipUpdateCheck
 ```
 
 The deployment layout matches OBS's Windows module paths:
@@ -107,17 +110,22 @@ The deployment layout matches OBS's Windows module paths:
 <portable-root>\data\obs-plugins\obs-sync-replay\locale\en-US.ini
 ```
 
-The deploy script copies only the plugin DLL and its data files. It reports every
+The build script copies only the plugin DLL and its data files. It reports every
 destination and fails when the artifact, portable executable, or portable marker is
 missing.
+
+The build and research scripts together deploy and start the clean
+manual-testing instance. See
+[manual-testing.md](manual-testing.md) for the focused Replay configuration
+checks.
 
 ## Clean Stock-OBS Research Runtime
 
 The stock-OBS experiment must start from a disposable clean runtime. After deploying
-the plugin, use the research launcher rather than `run-obs-dev.ps1`:
+the plugin, use the research script:
 
 ```powershell
-.\scripts\run-obs-research.ps1
+.\scripts\research.ps1
 ```
 
 The launcher refuses to reset a running portable OBS process, removes only the
@@ -152,14 +160,15 @@ creation, video check, and coordinator start. A run is invalid if the plugin emi
 `[sync-bootstrap] ... failed` line or never emits the empty-placeholder cleanup,
 `clean-source-check` with zero counts, and `complete`.
 
-For a one-command Debug iteration (configure, build, deploy, and launch):
+For a complete Debug iteration:
 
 ```powershell
-.\scripts\dev.ps1
+.\scripts\build.ps1
+.\scripts\research.ps1
 ```
 
-Use `-NoLaunch` when only build and deployment are wanted.
-This convenience script also discovers the CMake executable bundled with Visual
+Use `start.ps1` instead of `research.ps1` when the existing manual profile should
+be preserved. The build script discovers the CMake executable bundled with Visual
 Studio when `cmake` is not on `PATH`.
 
 ## Fast Iteration Loop
@@ -168,15 +177,15 @@ After first-time setup:
 
 ```text
 edit
--> cmake --build --preset windows-debug
--> .\scripts\deploy-dev.ps1 -Configuration Debug
 -> close only the portable OBS process
--> .\scripts\run-obs-dev.ps1
+-> .\scripts\build.ps1
+-> .\scripts\start.ps1 -SkipUpdateCheck
 -> inspect the portable OBS log
 ```
 
-The scripts never stop an OBS process. Close the specific portable instance normally
-before overwriting an in-use DLL; never terminate every `obs64.exe` process.
+The start workflow refuses to modify a running instance. Close the specific
+portable instance normally before rebuilding or rerunning it; never terminate
+every `obs64.exe` process.
 
 Portable logs are under:
 
@@ -194,15 +203,14 @@ Normal shutdown contains the matching `plugin unloaded` entry.
 
 ## Visual Studio Debugging
 
-1. Build and deploy `windows-debug`.
-2. Start OBS with `scripts/run-obs-dev.ps1`; note the exact PID printed by the script.
-3. In Visual Studio, select **Debug > Attach to Process**.
-4. Select that PID and use the Native code debugger.
-5. Add `build\windows-debug\Debug` to the symbol locations if the PDB is not found
+1. Run `scripts/build.ps1`, then `scripts/research.ps1`; note the exact PID printed by the script.
+2. In Visual Studio, select **Debug > Attach to Process**.
+3. Select that PID and use the Native code debugger.
+4. Add `build\windows-debug\Debug` to the symbol locations if the PDB is not found
    automatically.
 
 This attaches to the portable process without committing a machine-specific Visual
-Studio user file. The run script uses the configured executable directly and passes
+Studio user file. The launcher uses the configured executable directly and passes
 `--portable --multi`; it never launches the user's normal OBS installation.
 
 ## Formatting and Static Analysis
