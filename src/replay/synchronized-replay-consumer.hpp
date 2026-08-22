@@ -32,10 +32,12 @@ class SynchronizedReplayConsumer final {
     SynchronizedReplayConsumer(const SynchronizedReplayConsumer&) = delete;
     SynchronizedReplayConsumer& operator=(const SynchronizedReplayConsumer&) = delete;
 
-    bool RequestSave(std::vector<std::filesystem::path> paths, uint64_t duration_ns);
+    bool RequestSave(std::vector<std::filesystem::path> paths, uint64_t duration_ns,
+                     std::vector<CaptureStreamId> stream_ids = {});
     void Wait() noexcept;
     bool active() const noexcept;
     std::optional<ReplaySaveResult> last_result() const;
+    std::string last_request_error() const;
 
   private:
     static ReplaySaveResult WriteSnapshot(ReplaySnapshot snapshot, std::vector<std::filesystem::path> paths);
@@ -46,6 +48,7 @@ class SynchronizedReplayConsumer final {
     std::thread worker_;
     bool active_ = false;
     std::optional<ReplaySaveResult> last_result_;
+    std::string last_request_error_;
 };
 
 } // namespace obs_sync_replay

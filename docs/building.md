@@ -2,9 +2,8 @@
 
 OBS Sync Replay is a Windows x64 native OBS module built with CMake and MSVC. The
 current research runtime includes deterministic post-startup scene bootstrap and
-synchronized rendering. Full Recording and Replay integration remain out of scope;
-the disposable Phase 6 three-stream encoded capture POC is enabled in the research
-runtime.
+plugin-owned Recording/Replay controls. Capture output and synchronization remain
+validated through the shared control engine and portable runtime workflow.
 
 ## Pinned OBS Development Baseline
 

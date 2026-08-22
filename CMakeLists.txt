@@ -11,6 +11,8 @@ option(OBS_SYNC_REPLAY_WARNINGS_AS_ERRORS "Treat plugin compiler warnings as err
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ObsSdk)
 
+set(_obs_qt_deps_dir "${_obs_source_dir}/.deps/obs-deps-qt6-${OBS_DEPS_VERSION}-x64")
+
 add_library(obs-sync-replay-timeline STATIC src/timeline/master-frame-timeline.cpp)
 target_compile_features(obs-sync-replay-timeline PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-timeline PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -49,6 +51,16 @@ target_compile_features(obs-sync-replay-capture PUBLIC cxx_std_17)
 target_include_directories(obs-sync-replay-capture PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 add_library(
+  obs-sync-replay-control
+  STATIC
+  src/control/capture-configuration.cpp
+  src/control/capture-control.cpp
+)
+target_link_libraries(obs-sync-replay-control PUBLIC obs-sync-replay-capture obs-sync-replay-replay)
+target_compile_features(obs-sync-replay-control PUBLIC cxx_std_17)
+target_include_directories(obs-sync-replay-control PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_library(
   obs-sync-replay-replay
   STATIC
   src/recording/synchronized-recording-consumer.cpp
@@ -74,22 +86,27 @@ add_library(
   MODULE
   src/bootstrap/deterministic-test-environment.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
-  src/experiment/three-stream-capture-poc.cpp
+  src/control/plugin-capture-runtime.cpp
   src/plugin/plugin-main.cpp
   src/recording/obs-synchronized-recording.cpp
   src/timeline/master-frame-coordinator.cpp
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
+  src/ui/capture-controls.cpp
+  src/ui/capture-controls-localization.cpp
+  src/ui/obs-controls-adapter.cpp
 )
 target_link_libraries(
   obs-sync-replay
   PRIVATE OBS::libobs OBS::obs-frontend-api obs-sync-replay-rendering-coordination obs-sync-replay-pipeline
           obs-sync-replay-recording obs-sync-replay-muxing obs-sync-replay-capture obs-sync-replay-replay
+          obs-sync-replay-control
 )
 target_compile_features(obs-sync-replay PRIVATE cxx_std_17)
 target_compile_definitions(obs-sync-replay PRIVATE OBS_SYNC_REPLAY_VERSION="${PROJECT_VERSION}")
 target_include_directories(obs-sync-replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_include_directories(obs-sync-replay PRIVATE "${_obs_deps_dir}/include")
+target_include_directories(obs-sync-replay PRIVATE "${_obs_qt_deps_dir}/include")
 target_link_libraries(
   obs-sync-replay
   PRIVATE
@@ -98,6 +115,9 @@ target_link_libraries(
     "${_obs_deps_dir}/lib/avutil.lib"
     "${_obs_deps_dir}/lib/swresample.lib"
     "${_obs_deps_dir}/lib/swscale.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Widgets.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Gui.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Core.lib"
 )
 
 if(MSVC)
@@ -177,6 +197,23 @@ if(MSVC)
 endif()
 add_test(NAME synchronized-replay-consumer COMMAND synchronized-replay-consumer-test)
 set_tests_properties(synchronized-replay-consumer PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
+
+add_executable(capture-control-test tests/control/capture-control-test.cpp)
+target_link_libraries(capture-control-test PRIVATE obs-sync-replay-control)
+target_compile_features(capture-control-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(capture-control-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME capture-control COMMAND capture-control-test)
+set_tests_properties(capture-control PROPERTIES ENVIRONMENT "PATH=${_obs_deps_dir}/bin")
+
+add_executable(capture-controls-state-test tests/ui/capture-controls-state-test.cpp)
+target_link_libraries(capture-controls-state-test PRIVATE obs-sync-replay-control)
+target_compile_features(capture-controls-state-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(capture-controls-state-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME capture-controls-state COMMAND capture-controls-state-test)
 
 add_test(
   NAME plugin-artifact

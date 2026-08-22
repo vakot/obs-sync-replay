@@ -382,18 +382,22 @@ product contract and should normally be rejected.
 
 ## Bootstrap Integration Baseline
 
+The following section records the earlier Phase 5 stock-output research baseline;
+the active Phase 7 product path is the plugin-owned control runtime described below.
+
 The initial module is built against the official OBS Studio 32.2.1 source tag and the
 official 2026-07-15 Windows x64 dependency bundle. CMake builds and installs only the
 matching `libobs` development target into ignored local state before building the
 plugin. This mirrors the dependency model used by the official OBS plugin template
 while keeping the repository independent of an installed OBS SDK.
 
-The runtime module owns the master-frame coordinator, synchronous dual-scene
-renderers, and the bounded retained GPU-pair pipeline. The Phase 5 research Recording
-runner additionally owns two stock native OBS encoder/output lifecycles, the
-transactional compressed-packet session, and two plugin-owned MKV sinks. It does not
-patch OBS or introduce a second encoder. Replay Buffer, Save Replay, normal OBS
-hotkeys, and settings inheritance remain outside this phase.
+The earlier research runtime owned the master-frame coordinator, synchronous
+dual-scene renderers, and the bounded retained GPU-pair pipeline. Its Phase 5
+Recording runner additionally owned two stock native OBS encoder/output lifecycles,
+the transactional compressed-packet session, and two plugin-owned MKV sinks. That
+research path did not patch OBS or introduce a second encoder. Its lack of Replay
+Buffer, Save Replay, normal OBS hotkeys, and settings inheritance was a baseline
+limitation; Phase 7 now provides plugin-owned equivalents below.
 
 The Recording session starts both stock pipelines as a preparation step, buffers
 packets until a common keyframe CTS is observed, then opens both MKV sinks from that
@@ -446,3 +450,63 @@ Windows deployment uses OBS's default module search layout:
 `obs-plugins/64bit/obs-sync-replay.dll` for the binary and
 `data/obs-plugins/obs-sync-replay` for module data. Development deployment is limited
 to an explicitly configured portable OBS root with a portable-mode marker.
+
+## Phase 7 Control and Configuration Layer
+
+Phase 7 adds an in-memory `CaptureConfiguration` over the Phase 6 shared capture
+session. The deterministic streams remain Master, Scene A, and Scene B, and each has
+one explicit participation mode: `Disabled`, `Recording`, `Replay`, or `Both`.
+Recording and Replay select their own configured stream subsets; a `Both` stream is
+still represented by one native OBS video encoder whose immutable packet is fanned
+out to both consumers.
+
+`CaptureControlEngine` owns independent infrastructure, Recording, and Replay
+states and exposes `StartRecording`, `StopRecording`, `StartReplay`, `StopReplay`,
+and `SaveReplay` commands. Repeated starts are explicit no-ops; Save Replay while
+Replay is off is an explicit invalid-state result. Stopping one consumer unsubscribes
+only that consumer and reconciles aggregate encoder demand, so a handoff does not
+restart an encoder or reset the shared CTS epoch. If both consumers become idle,
+capture and all demanded encoders stop; the next start creates a new capture epoch.
+
+Before activation, the control engine asks the encoder controller to create every
+non-disabled configured stream. It then activates only streams required by the
+aggregate demand. This two-phase lifecycle is required by OBS encoder groups,
+which cannot accept a new member after the first member has started; inactive
+resources therefore remain available for later consumer handoffs without restarting
+active encoders.
+
+The authoritative encoder rule is:
+
+```text
+stream needs encoder = recording consumer active and mode permits Recording
+                     or replay consumer active and mode permits Replay
+```
+
+Replay retention is enabled only while Replay is active. Recording-only capture still
+fans packets to its live consumer but does not retain a replay ring. Mixed-mode
+Replay saves use one common range selected across only the streams configured for
+Replay, while Recording receives only streams configured for Recording. Lifecycle
+diagnostics report encoder activation, retention by another consumer, and release
+with the active encoder count.
+
+The product runtime is plugin-owned and initializes idle after frontend loading. Its
+`ObsControlsAdapter` locates OBS 32.2.1's public Qt object structure at
+`controlsDock`, then replaces the `recordButton`, `replayBufferButton`, and
+`saveReplayButton` layout entries with plugin-owned buttons at the same indices. The
+stock widgets are hidden and retained, never destroyed or used as backend state, and
+are restored on teardown. The replacement buttons and plugin-owned frontend hotkeys
+call the same `PluginCaptureRuntime` control methods; neither uses stock OBS
+Recording or Replay Buffer state, buttons, or handlers. The deterministic stream
+configuration is currently Master=Both, Scene A=Both, and Scene B=Both.
+
+The former scripted OBS development harness was removed from the product runtime;
+the control engine's deterministic unit tests remain the separate validation path.
+Persistent settings, final per-scene configuration, audio, and Replay visibility based
+on the OBS Replay Buffer setting remain deferred. Native control lookup is isolated in
+the adapter because its object names and layout structure are OBS-version-sensitive.
+
+The product idle invariant is checked at load: before any explicit UI or hotkey
+action, Recording and Replay are Off and the plugin-owned active encoder count is
+zero. Shutdown disables plugin controls, restores the retained stock widgets,
+unregisters plugin hotkeys, stops both consumers, waits for active replay saves,
+drains capture, and releases the plugin-owned scene views and encoder group.

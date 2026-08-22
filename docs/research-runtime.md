@@ -11,11 +11,12 @@ The reproducible entry point is:
 Use `-SkipUpdateCheck` when the clean runtime should pass OBS's
 `--disable-updater` startup option.
 
-For the active-save shutdown test only, set
-`OBS_SYNC_REPLAY_THREE_STREAM_SAVE_DELAY_MS` to a positive value. The default is
-zero; this test-only hook delays a replay worker after it snapshots packets so a
-normal WM_CLOSE can be exercised while the save is active. It does not slow normal
-muxing.
+The product runtime installs plugin-owned Recording and Replay buttons into the
+native OBS controls area and registers frontend hotkeys after loading, with no
+automatic Recording, Replay, or encoder activation. The old scripted control
+harness is no longer part of the product module; control behavior is validated by
+the focused control/UI-state tests and by manual plugin interaction when desktop
+automation is available.
 
 `run-obs-research.ps1` refuses to modify a running portable OBS process. It clears
 the runtime's `config` directory and the plugin data directory, then creates one
@@ -59,8 +60,8 @@ scene collection. The plugin records that placeholder and item count, removes it
 when it is the sole empty scene, and then rechecks the namespace before construction.
 Any additional scene or any item in the placeholder invalidates the run. The plugin
 records the initial source/scene counts and every bootstrap API action in
-the OBS log. It starts the master-frame coordinator only after the environment has
-passed the fixed-video and zero-existing-source checks. Bootstrap is registered from
+the OBS log. It creates the plugin-owned control runtime idle only after the
+environment has passed the fixed-video and zero-existing-source checks. Bootstrap is registered from
 `obs_module_post_load` and runs on `OBS_FRONTEND_EVENT_FINISHED_LOADING`, after OBS
 activates its empty collection and on the frontend thread required by stock scene
 signals.

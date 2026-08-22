@@ -55,27 +55,40 @@ SynchronizedReplayConsumer::~SynchronizedReplayConsumer() {
     Wait();
 }
 
-bool SynchronizedReplayConsumer::RequestSave(std::vector<std::filesystem::path> paths, const uint64_t duration_ns) {
+bool SynchronizedReplayConsumer::RequestSave(std::vector<std::filesystem::path> paths, const uint64_t duration_ns,
+                                              std::vector<CaptureStreamId> stream_ids) {
+    const auto reject = [this](std::string reason) {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        last_request_error_ = std::move(reason);
+        return false;
+    };
     if (paths.empty()) {
-        return false;
+        return reject("invalid-paths");
     }
-    std::optional<ReplaySnapshot> snapshot = capture_.SnapshotCommonRange(duration_ns);
-    if (!snapshot || snapshot->packets.size() != paths.size()) {
-        return false;
+    const ReplaySnapshotAttempt attempt = stream_ids.empty()
+                                              ? capture_.SnapshotCommonRangeDetailed(duration_ns)
+                                              : capture_.SnapshotCommonRangeDetailed(stream_ids, duration_ns);
+    if (!attempt.snapshot) {
+        return reject(attempt.reason.empty() ? "snapshot-rejected" : attempt.reason);
+    }
+    if (attempt.snapshot->packets.size() != paths.size()) {
+        return reject("snapshot-stream-count-mismatch");
     }
 
     std::thread previous;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         if (active_) {
+            last_request_error_ = "save-already-active";
             return false;
         }
         if (worker_.joinable()) {
             previous = std::move(worker_);
         }
         active_ = true;
+        last_request_error_.clear();
         last_result_.reset();
-        worker_ = std::thread([this, snapshot = std::move(*snapshot), paths = std::move(paths)]() mutable {
+        worker_ = std::thread([this, snapshot = std::move(*attempt.snapshot), paths = std::move(paths)]() mutable {
             if (test_save_delay_ms_ > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(test_save_delay_ms_));
             }
@@ -110,6 +123,11 @@ bool SynchronizedReplayConsumer::active() const noexcept {
 std::optional<ReplaySaveResult> SynchronizedReplayConsumer::last_result() const {
     const std::lock_guard<std::mutex> lock(mutex_);
     return last_result_;
+}
+
+std::string SynchronizedReplayConsumer::last_request_error() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return last_request_error_;
 }
 
 ReplaySaveResult SynchronizedReplayConsumer::WriteSnapshot(ReplaySnapshot snapshot,
