@@ -154,8 +154,9 @@ void CaptureControls::ApplyPresentation() {
     const CaptureInfrastructureState capture_state = runtime_.capture_state();
     const RecordingConsumerState recording_state = runtime_.recording_state();
     const ReplayConsumerState replay_state = runtime_.replay_state();
+    const CaptureControlsLabels labels = ResolveCaptureControlsLabels();
     const CaptureControlsPresentation presentation = MakeCaptureControlsPresentation(
-        capture_state, recording_state, replay_state, recording_failed_, replay_failed_);
+        capture_state, recording_state, replay_state, recording_failed_, replay_failed_, labels);
     const auto to_qstring = [](const std::string& value) {
         return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
     };
@@ -169,7 +170,7 @@ void CaptureControls::ApplyPresentation() {
     replay_button_->setVisible(presentation.replay.visible);
     SetButtonClasses(replay_button_, presentation.replay.state);
 
-    save_replay_button_->setText(QStringLiteral("Save Replay"));
+    save_replay_button_->setText(to_qstring(presentation.save_replay_text));
     save_replay_button_->setEnabled(presentation.save_replay_enabled);
     save_replay_button_->setVisible(true);
     SetButtonClasses(save_replay_button_, CaptureControlVisualState::Inactive);

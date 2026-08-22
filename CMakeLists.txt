@@ -93,6 +93,7 @@ add_library(
   src/rendering/scene-renderer.cpp
   src/rendering/synchronized-scene-renderer.cpp
   src/ui/capture-controls.cpp
+  src/ui/capture-controls-localization.cpp
   src/ui/obs-controls-adapter.cpp
 )
 target_link_libraries(

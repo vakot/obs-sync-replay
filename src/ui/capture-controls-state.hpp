@@ -1,6 +1,7 @@
 #pragma once
 
 #include "control/capture-control.hpp"
+#include "ui/capture-controls-localization.hpp"
 
 #include <string>
 
@@ -25,52 +26,55 @@ struct CaptureButtonPresentation final {
 struct CaptureControlsPresentation final {
     CaptureButtonPresentation recording;
     CaptureButtonPresentation replay;
+    std::string save_replay_text;
     bool save_replay_enabled = false;
 };
 
 inline CaptureControlsPresentation MakeCaptureControlsPresentation(
     const CaptureInfrastructureState infrastructure, const RecordingConsumerState recording,
-    const ReplayConsumerState replay, const bool recording_failed, const bool replay_failed) {
+    const ReplayConsumerState replay, const bool recording_failed, const bool replay_failed,
+    const CaptureControlsLabels &labels) {
     CaptureControlsPresentation presentation;
+    presentation.save_replay_text = labels.save_replay;
 
     if (infrastructure == CaptureInfrastructureState::Failed || recording_failed) {
-        presentation.recording = {CaptureControlVisualState::Failed, "Recording unavailable", false, true};
+        presentation.recording = {CaptureControlVisualState::Failed, labels.recording_unavailable, false, true};
     } else {
         switch (recording) {
         case RecordingConsumerState::Off:
-            presentation.recording = {CaptureControlVisualState::Inactive, "Start Recording", true, true};
+            presentation.recording = {CaptureControlVisualState::Inactive, labels.start_recording, true, true};
             break;
         case RecordingConsumerState::Starting:
-            presentation.recording = {CaptureControlVisualState::Starting, "Starting Recording...", false, true};
+            presentation.recording = {CaptureControlVisualState::Starting, labels.starting_recording, false, true};
             break;
         case RecordingConsumerState::Running:
-            presentation.recording = {CaptureControlVisualState::Active, "Stop Recording", true, true};
+            presentation.recording = {CaptureControlVisualState::Active, labels.stop_recording, true, true};
             break;
         case RecordingConsumerState::Stopping:
-            presentation.recording = {CaptureControlVisualState::Stopping, "Stopping Recording...", false, true};
+            presentation.recording = {CaptureControlVisualState::Stopping, labels.stopping_recording, false, true};
             break;
         }
     }
 
     if (infrastructure == CaptureInfrastructureState::Failed || replay_failed) {
-        presentation.replay = {CaptureControlVisualState::Failed, "Replay Buffer unavailable", false, true};
+        presentation.replay = {CaptureControlVisualState::Failed, labels.replay_buffer_unavailable, false, true};
     } else {
         switch (replay) {
         case ReplayConsumerState::Off:
-            presentation.replay = {CaptureControlVisualState::Inactive, "Start Replay Buffer", true, true};
+            presentation.replay = {CaptureControlVisualState::Inactive, labels.start_replay_buffer, true, true};
             break;
         case ReplayConsumerState::Starting:
-            presentation.replay = {CaptureControlVisualState::Starting, "Starting Replay Buffer...", false, true};
+            presentation.replay = {CaptureControlVisualState::Starting, labels.starting_replay_buffer, false, true};
             break;
         case ReplayConsumerState::Running:
-            presentation.replay = {CaptureControlVisualState::Active, "Stop Replay Buffer", true, true};
+            presentation.replay = {CaptureControlVisualState::Active, labels.stop_replay_buffer, true, true};
             presentation.save_replay_enabled = true;
             break;
         case ReplayConsumerState::Saving:
-            presentation.replay = {CaptureControlVisualState::Saving, "Saving Replay...", false, true};
+            presentation.replay = {CaptureControlVisualState::Saving, labels.saving_replay, false, true};
             break;
         case ReplayConsumerState::Stopping:
-            presentation.replay = {CaptureControlVisualState::Stopping, "Stopping Replay Buffer...", false, true};
+            presentation.replay = {CaptureControlVisualState::Stopping, labels.stopping_replay_buffer, false, true};
             break;
         }
     }

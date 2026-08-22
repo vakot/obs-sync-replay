@@ -199,6 +199,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void*) {
 } // namespace
 
 OBS_DECLARE_MODULE()
+OBS_MODULE_USE_DEFAULT_LOCALE("obs-sync-replay", "en-US")
 
 MODULE_EXPORT const char* obs_module_name(void) {
     return "OBS Sync Replay";
