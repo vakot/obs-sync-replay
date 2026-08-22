@@ -2,6 +2,7 @@
 
 #include "control/plugin-capture-runtime.hpp"
 #include "ui/capture-controls-state.hpp"
+#include "ui/obs-controls-adapter.hpp"
 
 #include <QtCore/QTimer>
 #include <QtWidgets/QLabel>
@@ -41,13 +42,17 @@ void SetButtonClasses(QPushButton* button, const CaptureControlVisualState state
 
 } // namespace
 
-CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent) : QObject(parent), runtime_(runtime) {
+CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent, ObsControlsAdapter* controls_adapter)
+    : QObject(parent), runtime_(runtime), controls_adapter_(controls_adapter) {
     recording_button_ = new QPushButton(parent);
     recording_button_->setObjectName(QStringLiteral("obsSyncReplayRecordingButton"));
+    recording_button_->setProperty("obsSyncReplayPluginControl", true);
     replay_button_ = new QPushButton(parent);
     replay_button_->setObjectName(QStringLiteral("obsSyncReplayReplayButton"));
+    replay_button_->setProperty("obsSyncReplayPluginControl", true);
     save_replay_button_ = new QPushButton(parent);
     save_replay_button_->setObjectName(QStringLiteral("obsSyncReplaySaveButton"));
+    save_replay_button_->setProperty("obsSyncReplayPluginControl", true);
     save_replay_button_->setVisible(false);
 
     status_ = new QLabel(parent);
@@ -62,6 +67,9 @@ CaptureControls::CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent)
     refresh_timer_->setInterval(250);
     QObject::connect(refresh_timer_, &QTimer::timeout, this, [this] {
         (void)runtime_.RefreshReplayConfiguration();
+        if (controls_adapter_) {
+            (void)controls_adapter_->Reconcile(*this);
+        }
         runtime_.PollReplaySave();
         ApplyPresentationSafely();
     });
@@ -179,7 +187,9 @@ void CaptureControls::ApplyPresentation() {
 
     save_replay_button_->setEnabled(presentation.save_replay_enabled);
     save_replay_button_->setVisible(presentation.save_replay_visible);
-    save_replay_button_->setText(to_qstring(presentation.save_replay_text));
+    save_replay_button_->setText(QString());
+    save_replay_button_->setToolTip(to_qstring(presentation.save_replay_text));
+    save_replay_button_->setAccessibleName(to_qstring(presentation.save_replay_text));
     SetButtonClasses(save_replay_button_, CaptureControlVisualState::Inactive);
 }
 

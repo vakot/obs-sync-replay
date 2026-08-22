@@ -176,7 +176,7 @@ void StartPluginOwnedRuntime() {
             static_cast<QWidget*>(obs_frontend_get_main_window()));
         if (controls_adapter->Locate()) {
             capture_controls = std::make_unique<obs_sync_replay::CaptureControls>(
-                *capture_runtime, controls_adapter->controls_parent());
+                *capture_runtime, controls_adapter->controls_parent(), controls_adapter.get());
             if (!controls_adapter->Install(*capture_controls)) {
                 capture_controls.reset();
                 controls_adapter.reset();

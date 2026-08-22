@@ -71,6 +71,8 @@ void TestTransitionsAndSave() {
             "recording and replay must activate independently");
     Require(active.save_replay_visible, "save must be visible while replay is active");
     Require(active.save_replay_enabled, "save must be enabled while replay is active");
+    Require(active.save_replay_text == labels.save_replay,
+            "active save control must retain its localized accessibility label");
 
     const CaptureControlsPresentation saving = MakeCaptureControlsPresentation(
         CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Saving, true, false,

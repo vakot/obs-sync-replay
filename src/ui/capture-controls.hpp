@@ -12,10 +12,11 @@ class QWidget;
 namespace obs_sync_replay {
 
 class PluginCaptureRuntime;
+class ObsControlsAdapter;
 
 class CaptureControls final : public QObject {
   public:
-    explicit CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent);
+    explicit CaptureControls(PluginCaptureRuntime& runtime, QWidget* parent, ObsControlsAdapter* controls_adapter);
     ~CaptureControls() override;
 
     CaptureControls(const CaptureControls&) = delete;
@@ -37,6 +38,7 @@ class CaptureControls final : public QObject {
     void ApplyPresentationSafely();
 
     PluginCaptureRuntime& runtime_;
+    ObsControlsAdapter* controls_adapter_ = nullptr;
     QPushButton* recording_button_ = nullptr;
     QPushButton* replay_button_ = nullptr;
     QPushButton* save_replay_button_ = nullptr;

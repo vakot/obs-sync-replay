@@ -12,6 +12,8 @@
 
 #include <obs-module.h>
 
+#include <algorithm>
+
 namespace obs_sync_replay {
 
 ObsControlsAdapter::ObsControlsAdapter(QWidget* frontend_window) : frontend_window_(frontend_window) {}
@@ -37,9 +39,9 @@ bool ObsControlsAdapter::Locate() {
         return false;
     }
     controls_parent_ = controls_dock_->widget();
-    native_recording_button_ = controls_parent_->findChild<QPushButton*>(QStringLiteral("recordButton"));
-    native_replay_button_ = controls_parent_->findChild<QPushButton*>(QStringLiteral("replayBufferButton"));
-    native_save_replay_button_ = controls_parent_->findChild<QPushButton*>(QStringLiteral("saveReplayButton"));
+    native_recording_button_ = FindNativeButtons(QStringLiteral("recordButton")).value(0, nullptr);
+    native_replay_button_ = FindNativeButtons(QStringLiteral("replayBufferButton")).value(0, nullptr);
+    native_save_replay_button_ = FindNativeButtons(QStringLiteral("saveReplayButton")).value(0, nullptr);
     if (!native_recording_button_ || !native_replay_button_ || !native_save_replay_button_) {
         Fail("native-recording-or-replay-control-not-found");
         return false;
@@ -70,6 +72,25 @@ bool ObsControlsAdapter::Install(CaptureControls& controls) {
     return true;
 }
 
+bool ObsControlsAdapter::Reconcile(CaptureControls& controls) {
+    if (!installed_) {
+        return false;
+    }
+    if (!controls_parent_ || !controls.recording_button() || !controls.replay_button() ||
+        !controls.save_replay_button()) {
+        Fail("native-control-reconciliation-arguments");
+        return false;
+    }
+
+    // OBS may reinsert its named controls when replay configuration is applied. Keep
+    // the plugin controls in the recorded slots and detach every stock control with
+    // the exact native object name; arbitrary dock children are never touched.
+    ReconcileNativeControl(QStringLiteral("recordButton"), native_recording_button_, controls.recording_button());
+    ReconcileNativeControl(QStringLiteral("replayBufferButton"), native_replay_button_, controls.replay_button());
+    ReconcileNativeControl(QStringLiteral("saveReplayButton"), native_save_replay_button_, controls.save_replay_button());
+    return true;
+}
+
 void ObsControlsAdapter::Restore() noexcept {
     const size_t restored_count = replacements_.size();
     for (auto iterator = replacements_.rbegin(); iterator != replacements_.rend(); ++iterator) {
@@ -83,7 +104,16 @@ void ObsControlsAdapter::Restore() noexcept {
             replacement.native->setEnabled(replacement.enabled);
         }
     }
+    for (auto iterator = extra_native_controls_.rbegin(); iterator != extra_native_controls_.rend(); ++iterator) {
+        NativeRestoration& restoration = *iterator;
+        if (restoration.layout && restoration.native && restoration.layout->indexOf(restoration.native) < 0) {
+            restoration.layout->insertWidget(restoration.index, restoration.native, restoration.alignment);
+            restoration.native->setVisible(restoration.visible);
+            restoration.native->setEnabled(restoration.enabled);
+        }
+    }
     replacements_.clear();
+    extra_native_controls_.clear();
     installed_ = false;
     if (restored_count > 0) {
         blog(LOG_INFO, "[plugin-ui] native controls restored count=%zu", restored_count);
@@ -139,6 +169,83 @@ bool ObsControlsAdapter::Replace(QPushButton* native, QPushButton* replacement) 
     return true;
 }
 
+bool ObsControlsAdapter::ReconcileNativeControl(const QString& object_name, QPushButton* primary_native,
+                                                QPushButton* replacement) {
+    bool reconciled = false;
+    for (QPushButton* native : FindNativeButtons(object_name)) {
+        if (!native || native == replacement) {
+            continue;
+        }
+
+        QBoxLayout* layout = FindContainingLayout(controls_parent_->layout(), native);
+        if (native == primary_native || IsTrackedExtraNative(native)) {
+            if (layout) {
+                layout->removeWidget(native);
+            }
+            native->setVisible(false);
+            native->setEnabled(false);
+            if (native == primary_native) {
+                CopyNativeAppearance(native, replacement);
+            }
+            reconciled = true;
+            continue;
+        }
+
+        if (!layout) {
+            native->setVisible(false);
+            native->setEnabled(false);
+            reconciled = true;
+            continue;
+        }
+
+        const int index = layout->indexOf(native);
+        if (index < 0) {
+            continue;
+        }
+        QLayoutItem* item = layout->itemAt(index);
+        NativeRestoration restoration;
+        restoration.layout = layout;
+        restoration.native = native;
+        restoration.index = index;
+        restoration.alignment = item ? item->alignment() : Qt::Alignment{};
+        restoration.visible = native->isVisible();
+        restoration.enabled = native->isEnabled();
+        layout->removeWidget(native);
+        native->setVisible(false);
+        native->setEnabled(false);
+        extra_native_controls_.push_back(restoration);
+        blog(LOG_WARNING, "[plugin-ui] native control reconciled object=%s action=detached-reintroduced-widget",
+             object_name.toUtf8().constData());
+        reconciled = true;
+    }
+    return reconciled;
+}
+
+QList<QPushButton*> ObsControlsAdapter::FindNativeButtons(const QString& object_name) const {
+    QList<QPushButton*> buttons;
+    if (!controls_parent_) {
+        return buttons;
+    }
+    const QList<QPushButton*> candidates =
+        controls_parent_->findChildren<QPushButton*>(object_name, Qt::FindChildrenRecursively);
+    for (QPushButton* candidate : candidates) {
+        if (candidate && !candidate->property("obsSyncReplayPluginControl").toBool()) {
+            buttons.push_back(candidate);
+        }
+    }
+    std::stable_sort(buttons.begin(), buttons.end(), [this](QPushButton* left, QPushButton* right) {
+        const bool left_in_layout = FindContainingLayout(controls_parent_->layout(), left) != nullptr;
+        const bool right_in_layout = FindContainingLayout(controls_parent_->layout(), right) != nullptr;
+        return left_in_layout && !right_in_layout;
+    });
+    return buttons;
+}
+
+bool ObsControlsAdapter::IsTrackedExtraNative(QPushButton* native) const {
+    return std::any_of(extra_native_controls_.begin(), extra_native_controls_.end(),
+                       [native](const NativeRestoration& restoration) { return restoration.native == native; });
+}
+
 QBoxLayout* ObsControlsAdapter::FindContainingLayout(QLayout* root, QWidget* target) {
     if (!root || !target) {
         return nullptr;
@@ -180,6 +287,7 @@ void ObsControlsAdapter::CopyNativeAppearance(QPushButton* native, QPushButton* 
     replacement->setAccessibleName(native->accessibleName());
     replacement->setStyleSheet(native->styleSheet());
     replacement->setObjectName(native->objectName());
+    replacement->setProperty("obsSyncReplayPluginControl", true);
     replacement->setProperty("obsSyncReplayBaseClass", native->property("class"));
     if (native->objectName() == QStringLiteral("saveReplayButton")) {
         const int native_height = native->sizeHint().height();
