@@ -207,7 +207,7 @@ integration only and are not synchronization evidence.
 ## Clean Runtime Bootstrap Validation
 
 The stock-OBS research experiment must be launched with
-`scripts/run-obs-research.ps1` after deployment. The launcher resets the configured
+`scripts/research.ps1` after `scripts/build.ps1`. The launcher resets the configured
 portable runtime and generates only the documented `Sync Replay Research` profile
 video keys; it must not be replaced with manual UI setup or a prior Phase 1–7 runtime.
 
