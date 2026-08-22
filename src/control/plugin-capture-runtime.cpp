@@ -1,6 +1,7 @@
 #include "control/plugin-capture-runtime.hpp"
 
 #include "capture/synchronized-capture-session.hpp"
+#include "config/obs-audio-configuration.hpp"
 #include "config/obs-replay-configuration.hpp"
 #include "control/capture-control.hpp"
 #include "plugin/plugin-log.hpp"
@@ -31,7 +32,6 @@ namespace {
 constexpr char kNullOutputId[] = "null_output";
 constexpr char kX264EncoderId[] = "obs_x264";
 constexpr char kNvencEncoderId[] = "obs_nvenc_h264_tex";
-constexpr char kAudioEncoderId[] = "ffmpeg_aac";
 constexpr uint32_t kFallbackWidth = 1920;
 constexpr uint32_t kFallbackHeight = 1080;
 
@@ -60,12 +60,16 @@ struct CallbackContext final {
     uint64_t packet_count = 0;
     uint64_t first_source_cts = 0;
     uint64_t last_source_cts = 0;
+    AudioTrackId audio_track_id = 0;
+    bool shared_audio = false;
+    uint64_t audio_duration_cts = 0;
 };
 
 void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encoder_packet_time *packet_time,
                     void *param) {
     auto *context = static_cast<CallbackContext *>(param);
-    if (!context || !context->capture || !packet || packet->type != OBS_ENCODER_VIDEO) {
+    if (!context || !context->capture || !packet || !packet_time ||
+        (packet->type != OBS_ENCODER_VIDEO && !(context->shared_audio && packet->type == OBS_ENCODER_AUDIO))) {
         return;
     }
     if (packet->size == 0 || !packet_time || packet->timebase_num <= 0 || packet->timebase_den <= 0) {
@@ -80,6 +84,9 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
     copy.timebase_num = packet->timebase_num;
     copy.timebase_den = packet->timebase_den;
     copy.keyframe = packet->keyframe;
+    copy.kind = packet->type == OBS_ENCODER_AUDIO ? EncodedPacketKind::Audio : EncodedPacketKind::Video;
+    copy.audio_track_index = context->audio_track_id;
+    copy.duration_cts = context->audio_duration_cts;
     copy.payload.assign(packet->data, packet->data + packet->size);
     std::vector<uint8_t> extra_data;
     if (packet->encoder) {
@@ -90,7 +97,11 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
         }
     }
     const uint64_t source_cts = copy.source_cts;
-    if (!context->capture->Ingest(context->stream_id, std::move(copy), std::move(extra_data))) {
+    const bool accepted = copy.kind == EncodedPacketKind::Audio
+                              ? context->capture->IngestAudio(context->audio_track_id, std::move(copy),
+                                                              std::move(extra_data))
+                              : context->capture->Ingest(context->stream_id, std::move(copy), std::move(extra_data));
+    if (!accepted) {
         OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "packet-rejected stream=%s invariant=capture-session-accepted-packet-required",
              context->stream_name);
         return;
@@ -109,7 +120,6 @@ struct StreamResources final {
     CaptureStreamId capture_id = 0;
     video_t *video = nullptr;
     obs_encoder_t *video_encoder = nullptr;
-    obs_encoder_t *audio_encoder = nullptr;
     obs_output_t *output = nullptr;
     CallbackContext callback;
     bool started = false;
@@ -184,10 +194,6 @@ void ReleaseStream(StreamResources &stream) {
         obs_encoder_release(stream.video_encoder);
         stream.video_encoder = nullptr;
     }
-    if (stream.audio_encoder) {
-        obs_encoder_release(stream.audio_encoder);
-        stream.audio_encoder = nullptr;
-    }
 }
 
 std::string FileNameComponent(std::string value) {
@@ -229,14 +235,17 @@ struct PluginCaptureRuntime::State final {
 class PluginEncoderController final : public EncoderController {
   public:
     PluginEncoderController(const char *encoder_id, obs_encoder_group_t *group, SynchronizedCaptureSession& capture,
-                            std::vector<video_t*> capture_videos, std::vector<StreamResources>& resources)
+                            std::vector<video_t*> capture_videos, std::vector<StreamResources>& resources,
+                            const ObsAudioConfiguration& audio_configuration)
         : encoder_id_(encoder_id), group_(group), capture_(capture), capture_videos_(std::move(capture_videos)),
-          resources_(resources) {}
+          resources_(resources), audio_configuration_(audio_configuration) {}
 
     ~PluginEncoderController() override {
         for (StreamResources& resource : resources_) {
             ReleaseStream(resource);
         }
+        StopSharedAudio();
+        ReleaseSharedAudio();
     }
 
     bool EnsureCreated(const CaptureStreamId stream_id, const ConfiguredStream& stream) override {
@@ -258,9 +267,16 @@ class PluginEncoderController final : public EncoderController {
         if (!resource.output || resource.capture_id != stream_id) {
             return false;
         }
+        if (!audio_started_ && !StartSharedAudio()) {
+            return false;
+        }
         resource.started = obs_output_start(resource.output);
         if (!resource.started) {
             LogOutputFailure("start", resource);
+            if (std::none_of(resources_.begin(), resources_.end(),
+                             [](const StreamResources& candidate) { return candidate.started; })) {
+                StopSharedAudio();
+            }
             ReleaseStream(resource);
             return false;
         }
@@ -280,6 +296,7 @@ class PluginEncoderController final : public EncoderController {
         resource.release_pending = true;
         if (std::none_of(resources_.begin(), resources_.end(),
                          [](const StreamResources& candidate) { return candidate.started; })) {
+            StopSharedAudio();
             // OBS only permits detaching a group member after every member has
             // stopped. Defer destruction until this barrier so the group never
             // retains stale encoder references across capture epochs.
@@ -301,6 +318,7 @@ class PluginEncoderController final : public EncoderController {
                     candidate.release_pending = false;
                 }
             }
+            ReleaseSharedAudio();
         }
         OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-release stream=%s family=%s", stream.name.c_str(), encoder_id_);
     }
@@ -312,8 +330,9 @@ class PluginEncoderController final : public EncoderController {
     }
 
     size_t active_count() const noexcept override {
-        return static_cast<size_t>(std::count_if(resources_.begin(), resources_.end(),
-                                                 [](const StreamResources& resource) { return resource.started; }));
+        const size_t video_count = static_cast<size_t>(std::count_if(
+            resources_.begin(), resources_.end(), [](const StreamResources& resource) { return resource.started; }));
+        return video_count + (audio_started_ ? audio_encoders_.size() : 0);
     }
 
   private:
@@ -326,6 +345,91 @@ class PluginEncoderController final : public EncoderController {
     SynchronizedCaptureSession& capture_;
     std::vector<video_t*> capture_videos_;
     std::vector<StreamResources>& resources_;
+    const ObsAudioConfiguration& audio_configuration_;
+    obs_output_t* audio_output_ = nullptr;
+    std::vector<obs_encoder_t*> audio_encoders_;
+    std::vector<CallbackContext> audio_callbacks_;
+    bool audio_started_ = false;
+
+    bool CreateSharedAudio() {
+        if (audio_output_ || audio_configuration_.recording_tracks.empty()) {
+            return audio_output_ != nullptr;
+        }
+        audio_output_ = obs_output_create(kNullOutputId, "obs-sync-replay-audio", nullptr, nullptr);
+        if (!audio_output_) {
+            return false;
+        }
+        audio_encoders_.reserve(audio_configuration_.recording_tracks.size());
+        audio_callbacks_.reserve(audio_configuration_.recording_tracks.size());
+        for (size_t index = 0; index < audio_configuration_.recording_tracks.size(); ++index) {
+            const AudioStreamConfig& config = audio_configuration_.recording_tracks[index];
+            obs_data_t* settings = obs_encoder_defaults(config.encoder_id.c_str());
+            if (settings) {
+                obs_data_set_int(settings, "bitrate", config.bitrate_kbps);
+            }
+            obs_encoder_t* encoder = obs_audio_encoder_create(config.encoder_id.c_str(),
+                                                               ("obs-sync-replay-audio-" + std::to_string(index)).c_str(),
+                                                               settings, config.mixer_index, nullptr);
+            if (settings) {
+                obs_data_release(settings);
+            }
+            if (!encoder) {
+                ReleaseSharedAudio();
+                return false;
+            }
+            obs_encoder_set_audio(encoder, obs_get_audio());
+            obs_output_set_audio_encoder(audio_output_, encoder, index);
+            audio_encoders_.push_back(encoder);
+            audio_callbacks_.push_back(CallbackContext{&capture_, 0, "shared-audio", 0, 0, 0,
+                                                        static_cast<AudioTrackId>(index), true,
+                                                        config.encoder_id == "ffmpeg_aac" || config.encoder_id == "aac"
+                                                            ? (1'000'000'000ULL * 1024 / config.sample_rate)
+                                                            : (1'000'000'000ULL * 960 / config.sample_rate)});
+            obs_output_add_packet_callback(audio_output_, OnOutputPacket, &audio_callbacks_.back());
+        }
+        return true;
+    }
+
+    bool StartSharedAudio() {
+        if (audio_started_) {
+            return true;
+        }
+        if (!CreateSharedAudio()) {
+            return false;
+        }
+        audio_started_ = obs_output_start(audio_output_);
+        if (!audio_started_) {
+            ReleaseSharedAudio();
+        }
+        return audio_started_;
+    }
+
+    void StopSharedAudio() noexcept {
+        if (!audio_output_ || !audio_started_) {
+            return;
+        }
+        obs_output_stop(audio_output_);
+        WaitForOutputInactive(audio_output_);
+        audio_started_ = false;
+    }
+
+    void ReleaseSharedAudio() noexcept {
+        if (audio_output_) {
+            for (size_t index = 0; index < audio_callbacks_.size(); ++index) {
+                obs_output_remove_packet_callback(audio_output_, OnOutputPacket, &audio_callbacks_[index]);
+            }
+            obs_output_release(audio_output_);
+            audio_output_ = nullptr;
+        }
+        for (obs_encoder_t* encoder : audio_encoders_) {
+            if (encoder) {
+                obs_encoder_release(encoder);
+            }
+        }
+        audio_encoders_.clear();
+        audio_callbacks_.clear();
+        audio_started_ = false;
+    }
 
     bool CreateResource(const CaptureStreamId stream_id, const ConfiguredStream& stream) {
         if (stream_id >= resources_.size() || stream_id >= capture_videos_.size()) {
@@ -338,23 +442,17 @@ class PluginEncoderController final : public EncoderController {
         }
         StreamResources& resource = Resource(stream_id);
         obs_data_t *settings = CreateVideoSettings(encoder_id_);
-        obs_data_t *audio_settings = obs_encoder_defaults(kAudioEncoderId);
         resource.video_encoder = obs_video_encoder_create(encoder_id_, stream.name.c_str(), settings, nullptr);
-        resource.audio_encoder = obs_audio_encoder_create(kAudioEncoderId, stream.name.c_str(), audio_settings, 0,
-                                                          nullptr);
         resource.output = obs_output_create(kNullOutputId, stream.name.c_str(), nullptr, nullptr);
         if (settings) {
             obs_data_release(settings);
         }
-        if (audio_settings) {
-            obs_data_release(audio_settings);
-        }
-        if (!resource.video_encoder || !resource.audio_encoder || !resource.output) {
+        if (!resource.video_encoder || !resource.output || !CreateSharedAudio()) {
             OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control",
                  "encoder-create-failed identity=%s stream_id=%u video=%s audio=%s output=%s "
                  "invariant=all-stream-resources-required",
                  StreamIdentityLabel(stream.identity).c_str(), static_cast<unsigned int>(stream_id),
-                 resource.video_encoder ? "created" : "missing", resource.audio_encoder ? "created" : "missing",
+                 resource.video_encoder ? "created" : "missing", audio_output_ ? "created" : "missing",
                  resource.output ? "created" : "missing");
             ReleaseStream(resource);
             return false;
@@ -363,9 +461,7 @@ class PluginEncoderController final : public EncoderController {
         resource.video = capture_videos_[stream_id];
         resource.identity = stream.identity;
         obs_encoder_set_video(resource.video_encoder, resource.video);
-        obs_encoder_set_audio(resource.audio_encoder, obs_get_audio());
         obs_output_set_video_encoder(resource.output, resource.video_encoder);
-        obs_output_set_audio_encoder(resource.output, resource.audio_encoder, 0);
         resource.callback = {&capture_, stream_id, stream.name.c_str()};
         obs_output_add_packet_callback(resource.output, OnOutputPacket, &resource.callback);
         if (group_) {
@@ -391,17 +487,19 @@ SynchronizedCaptureConfig RuntimeCaptureConfig(const ReplayConfiguration& replay
 
 struct PluginCaptureRuntime::ControlState final {
     ControlState(const char* encoder_id, std::vector<ConfiguredStream> configured_streams,
-                 std::vector<video_t*> capture_videos, const ReplayConfiguration& replay_configuration)
+                 std::vector<video_t*> capture_videos, const ReplayConfiguration& replay_configuration,
+                 ObsAudioConfiguration audio_configuration)
         : capture(RuntimeCaptureConfig(replay_configuration)), capture_videos(std::move(capture_videos)) {
         configuration.replay = replay_configuration;
         configuration.streams = std::move(configured_streams);
+        audio = std::move(audio_configuration);
         group = obs_encoder_group_create();
         if (!group) {
             return;
         }
         resources.resize(this->capture_videos.size());
         controller = std::make_unique<PluginEncoderController>(encoder_id, group, capture,
-                                                                this->capture_videos, resources);
+                                                                this->capture_videos, resources, audio);
         control = std::make_unique<CaptureControlEngine>(
             configuration, capture, *controller,
             [](const EncoderLifecycleDiagnostic& diagnostic) {
@@ -433,6 +531,7 @@ struct PluginCaptureRuntime::ControlState final {
     std::vector<StreamResources> resources;
     obs_encoder_group_t *group = nullptr;
     std::vector<video_t*> capture_videos;
+    ObsAudioConfiguration audio;
     std::unique_ptr<PluginEncoderController> controller;
     std::unique_ptr<CaptureControlEngine> control;
 };
@@ -565,6 +664,7 @@ void PluginCaptureRuntime::ResetSceneTargets() noexcept {
 bool PluginCaptureRuntime::BuildControlState() {
     std::vector<ConfiguredStream> configured_streams;
     std::vector<video_t*> capture_videos;
+    const ObsAudioConfiguration audio_configuration = ReadObsAudioConfiguration();
     for (const SceneTopologyEntry& entry : topology_model_.current().streams) {
         const StreamParticipationMode mode = entry.recording_enabled && entry.replay_enabled
                                                  ? StreamParticipationMode::Both
@@ -572,7 +672,9 @@ bool PluginCaptureRuntime::BuildControlState() {
                                                                            : entry.replay_enabled ? StreamParticipationMode::Replay
                                                                                                   : StreamParticipationMode::Disabled;
         if (entry.identity.kind == StreamKind::Master) {
-            configured_streams.push_back({entry.identity, "master", mode, StreamConfig(obs_get_video())});
+            PacketStreamConfig config = StreamConfig(obs_get_video());
+            config.audio_streams = audio_configuration.recording_tracks;
+            configured_streams.push_back({entry.identity, "master", mode, std::move(config)});
             if (mode != StreamParticipationMode::Disabled) {
                 capture_videos.push_back(obs_get_video());
             }
@@ -586,13 +688,16 @@ bool PluginCaptureRuntime::BuildControlState() {
                  entry.identity.key.c_str(), entry.display_name.c_str());
             return false;
         }
-        configured_streams.push_back({entry.identity, entry.display_name, mode, StreamConfig(scene->video)});
+        PacketStreamConfig config = StreamConfig(scene->video);
+        config.audio_streams = audio_configuration.recording_tracks;
+        configured_streams.push_back({entry.identity, entry.display_name, mode, std::move(config)});
         if (mode != StreamParticipationMode::Disabled) {
             capture_videos.push_back(scene->video);
         }
     }
     control_state_ = std::make_unique<ControlState>(SelectPluginEncoder(), std::move(configured_streams),
-                                                    std::move(capture_videos), replay_configuration_);
+                                                    std::move(capture_videos), replay_configuration_,
+                                                    audio_configuration);
     if (!control_state_->group || !control_state_->control || !control_state_->control->Initialize()) {
         control_state_.reset();
         return false;

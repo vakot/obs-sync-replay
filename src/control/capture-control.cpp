@@ -301,7 +301,16 @@ bool CaptureControlEngine::RegisterStreams() {
             }
         }
     }
-    return capture_id > 0;
+    if (capture_id == 0 || configuration_.streams.empty()) {
+        return false;
+    }
+    const auto audio_streams = configuration_.streams.front().packet_config.audio_streams;
+    for (AudioTrackId track_id = 0; track_id < audio_streams.size(); ++track_id) {
+        if (!capture_.RegisterAudioTrack(track_id, audio_streams[track_id])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool CaptureControlEngine::EnsureCaptureActive() {

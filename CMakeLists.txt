@@ -90,6 +90,7 @@ target_include_directories(obs-sync-replay-pipeline PUBLIC "${CMAKE_CURRENT_SOUR
 add_library(
   obs-sync-replay
   MODULE
+  src/config/obs-audio-configuration.cpp
   src/config/obs-replay-configuration.cpp
   src/experiment/stock-encoder-timeline-probe.cpp
   src/control/plugin-capture-runtime.cpp
