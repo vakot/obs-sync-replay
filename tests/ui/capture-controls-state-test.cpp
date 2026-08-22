@@ -138,6 +138,9 @@ void TestLookupFallbacks() {
     Require(!labels.recording_tooltip.empty() && labels.recording_tooltip != "Controls.PluginOwned.RecordingTooltip" &&
                 !labels.replay_tooltip.empty() && labels.replay_tooltip != "Controls.PluginOwned.ReplayTooltip",
             "plugin tooltip lookup failure must use English fallback text");
+    Require(labels.recording_tooltip == "Recording is handled by OBS Sync Replay plugin" &&
+                labels.replay_tooltip == "Replay Buffer is handled by OBS Sync Replay plugin",
+            "plugin tooltip fallback text must remain concise");
 }
 
 void TestObsAndPluginLookupKeys() {

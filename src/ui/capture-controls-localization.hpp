@@ -68,10 +68,10 @@ inline CaptureControlsLabels ResolveCaptureControlsLabels(const CaptureControlsL
     labels.action_unavailable = action_unavailable;
     labels.recording_tooltip = plugin(
         "Controls.PluginOwned.RecordingTooltip",
-        "Recording is handled by OBS Sync Replay to keep the master and per-scene files synchronized.");
+        "Recording is handled by OBS Sync Replay plugin");
     labels.replay_tooltip = plugin(
         "Controls.PluginOwned.ReplayTooltip",
-        "Replay Buffer is handled by OBS Sync Replay to save synchronized master and per-scene replays.");
+        "Replay Buffer is handled by OBS Sync Replay plugin");
     return labels;
 }
 
