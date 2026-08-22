@@ -157,10 +157,12 @@ void WaitForOutputInactive(obs_output_t *output) {
 void ReleaseStream(StreamResources &stream) {
     if (stream.video_encoder && stream.grouped) {
         if (!obs_encoder_set_group(stream.video_encoder, nullptr)) {
-            blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed stream=%s", StreamName(stream.id));
+            blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed identity=%s",
+                 StreamIdentityLabel(stream.identity).c_str());
             return;
         } else {
-            blog(LOG_INFO, "[plugin-control] encoder-group-detached stream=%s", StreamName(stream.id));
+            blog(LOG_INFO, "[plugin-control] encoder-group-detached identity=%s",
+                 StreamIdentityLabel(stream.identity).c_str());
         }
         stream.grouped = false;
     }
@@ -169,7 +171,7 @@ void ReleaseStream(StreamResources &stream) {
         blog(LOG_INFO,
              "[plugin-control] packet-stream-stopped stream=%s encoded_packets=%llu first_source_cts=%llu "
              "last_source_cts=%llu",
-             StreamName(stream.id), static_cast<unsigned long long>(stream.callback.packet_count),
+             StreamIdentityLabel(stream.identity).c_str(), static_cast<unsigned long long>(stream.callback.packet_count),
              static_cast<unsigned long long>(stream.callback.first_source_cts),
              static_cast<unsigned long long>(stream.callback.last_source_cts));
     }
@@ -283,12 +285,12 @@ class PluginEncoderController final : public EncoderController {
             for (StreamResources& candidate : resources_) {
                 if (candidate.video_encoder && candidate.grouped) {
                     if (!obs_encoder_set_group(candidate.video_encoder, nullptr)) {
-                        blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed stream=%s",
-                             StreamName(candidate.id));
+                        blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed identity=%s",
+                             StreamIdentityLabel(candidate.identity).c_str());
                     } else {
                         candidate.grouped = false;
-                        blog(LOG_INFO, "[plugin-control] encoder-group-detached stream=%s",
-                             StreamName(candidate.id));
+                        blog(LOG_INFO, "[plugin-control] encoder-group-detached identity=%s",
+                             StreamIdentityLabel(candidate.identity).c_str());
                     }
                 }
             }

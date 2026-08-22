@@ -24,9 +24,8 @@ The adapter also applies the stock backend availability rules:
 - Advanced `RecEncoder=none` selects `streamEncoder.json`; other encoders select `recordEncoder.json`. A `CBR`, `VBR`, or `ABR` rate control means the stock replay size is unlimited; other rate controls use `RecRBSize`.
 
 OBS's MB value is converted with `1024 * 1024`. The converted value is one
-global bound over the plugin's retained encoded packets for Master and every
-participating discovered scene. This matches the stock replay output's single
-packet-queue budget.
+global bound over the plugin's retained encoded packets for Master, Scene A,
+and Scene B. This matches the stock replay output's single packet-queue budget.
 Eviction removes a common temporal prefix and then removes partial leading GOPs
 from every stream, so Save Replay always sees one common range.
 
