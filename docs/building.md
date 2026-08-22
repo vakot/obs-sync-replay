@@ -111,6 +111,17 @@ The deploy script copies only the plugin DLL and its data files. It reports ever
 destination and fails when the artifact, portable executable, or portable marker is
 missing.
 
+For the shortest manual-testing workflow, use the combined launcher:
+
+```powershell
+.\scripts\start-manual-test.ps1 -SkipUpdateCheck
+```
+
+This builds, deploys, resets only the configured portable test profile, and
+starts the clean manual-testing instance. See
+[manual-testing.md](manual-testing.md) for the focused Replay configuration
+checks.
+
 ## Clean Stock-OBS Research Runtime
 
 The stock-OBS experiment must start from a disposable clean runtime. After deploying
