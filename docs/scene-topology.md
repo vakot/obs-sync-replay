@@ -28,6 +28,13 @@ Its callback order is preserved after Master, giving deterministic stream and
 encoder ordering without depending on Qt widgets. Invalid entries without a
 public UUID or name are rejected and logged.
 
+The enumeration is top-level by design. If `Gameplay` contains a group, a nested
+scene, and arbitrary sources, those items remain part of the `Gameplay` render and
+do not become additional streams. A collection containing `Gameplay`, `Camera`, and
+`BRB` therefore produces exactly `Master`, `Gameplay`, `Camera`, and `BRB`.
+Recursive source traversal is reserved for later audio semantics and must not be
+added to video discovery.
+
 Each topology entry carries stable identity and kind (`Master` or `Scene`), current
 display name and collection order, recording and replay participation flags, and
 an owned OBS source reference for scene rendering. Per-scene persistence and user
@@ -62,10 +69,19 @@ another scene or shifts a later frame into a removed scene's temporal slot.
 
 ## Runtime acceptance fixture
 
-The clean portable research launcher intentionally creates no scenes. Before a
-topology acceptance run, create at least four ordinary OBS scenes in the active
-collection (or use the research-only `scripts/prepare-obs-topology-fixture.ps1`),
-then inspect the plugin log for:
+Normal development uses the existing portable collection as-is:
+
+```powershell
+./scripts/build.ps1
+./scripts/start.ps1
+```
+
+The plugin does not require a research profile or fixture. A new/empty collection
+is valid and should log `top_level_scene_count=0` followed by a Master-only
+topology. For a multi-scene acceptance run, create at least four ordinary top-level
+OBS scenes in the active collection (or use the destructive, research-only
+`scripts/prepare-obs-topology-fixture.ps1` while OBS is closed), then inspect the
+plugin log for:
 
 1. deterministic `Master/Program` plus all four scene UUIDs in collection order;
 2. one unchanged topology after repeated idle polling;

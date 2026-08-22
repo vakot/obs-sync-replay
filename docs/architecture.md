@@ -192,39 +192,29 @@ cadence-discontinuity diagnostic instead of inventing unobserved frames. Future
 rendering work must attach to the already-issued `MasterFrame`; it must not fill the
 gap with an independently generated timeline.
 
-## Dual-Scene Rendering Integration (Phase 2)
+## Scene topology and rendering integration
 
-Phase 2 consumes the `MasterFrame` directly from `MasterFrameCoordinator`; it creates
-no render timer, per-scene callback, or secondary PTS source. The coordinator tick is
-on libobs's graphics thread but executes after libobs leaves its graphics context.
-For each accepted frame, `SynchronizedSceneRenderer` calls `obs_enter_graphics()`,
-renders Scene A and Scene B synchronously, and calls `obs_leave_graphics()` after both
-attempts. OBS 32.2.1's own `ScreenshotObj` uses this same supported context-enter
-pattern from a tick callback. This is deliberately not a queued "latest frame"
-handoff: the two attempts occur in the callback that owns the supplied frame.
+Production startup waits for OBS's finished-loading frontend event, then discovers
+the current collection through public `obs_enum_scenes()`. Discovery creates a
+Master/Program stream followed by every top-level OBS scene in callback order. A
+collection with no real scenes is valid and produces a Master-only topology. The
+plugin retains owned scene-source references and uses UUIDs for identity; names are
+display metadata only.
 
-Each `SceneRenderer` resolves the bootstrap-owned scene name (`Sync Research Scene A`
-or `Sync Research Scene B`) with `obs_get_source_by_name` for the individual attempt.
-That API returns a
-strong source reference, released immediately after rendering. The renderer verifies
-that the source is an `obs_scene_t`, obtains its native `obs_source_get_width` and
-`obs_source_get_height`, and renders it with `obs_source_video_render` into its own
-`gs_texrender_t` target. The target uses the source's reported graphics color space
-and is recreated if that space changes; target dimensions are the source's native
-dimensions for that attempt. `gs_texrender_end` marks the target rendered, so each
-subsequent master-frame attempt resets its own target before beginning; this is a
-graphics-resource lifecycle operation, not a timing decision. The target is created and destroyed only while the
-graphics context is entered. Its texture is GPU-only and remains owned by the
-renderer until that renderer's next render or destruction. Phase 3 must therefore
-copy a successful result before the renderer reaches its next render.
+`obs_enum_scenes()` is intentionally not a recursive scene-item walk. Groups, nested
+scene sources, and ordinary sources remain content rendered by their containing
+top-level scene. They do not create independent video streams. Audio traversal may
+define different semantics in Phase 8, but it must not change this video topology.
 
-`SceneRenderResult` copies the immutable `MasterFrame` and records a fixed A/B slot,
-status, dimensions, and non-owning texture pointer. `SceneRenderPairTracker` accepts
-only the active frame's exact ID and PTS and only one result per slot. Every frame
-therefore attempts A and B even if either fails. Missing, invalid, or unavailable
-scenes retain the current master slot and emit a diagnostic; subsequent frames never
-replace that missing result. Phase 3 retains only the complete successful pair before
-either short-lived source texture can be reused.
+The renderer consumes the `MasterFrame` directly from `MasterFrameCoordinator`; it
+creates no render timer, per-scene callback, or secondary PTS source. Every active
+top-level scene render inherits the same master identity and PTS. Add/remove/order
+changes are staged until the active capture epoch ends, while a rename updates only
+display metadata and never restarts an active encoder.
+
+Each scene target owns the public OBS scene source reference used by its view. A
+missing or unavailable scene is reported explicitly; the topology layer never
+substitutes a named fixture or shifts another scene into its temporal slot.
 
 ## Synchronized GPU Frame Pipeline (Phase 3)
 
@@ -272,30 +262,13 @@ failed slot. `sync-pipeline` diagnostics report `master_frame_id`, `master_pts`,
 status, queue size, and capacity; retained frames are debug-level except for sampled
 observations, while invalid pairs and pressure are explicit errors/warnings.
 
-## Clean Stock-OBS Research Bootstrap
+## Research runtime isolation
 
-The research branch does not depend on a previous scene collection, profile, source,
-camera, display capture, recording output, replay-buffer setting, or plugin state. The
-launcher resets the disposable portable runtime and creates only the profile video
-keys required before OBS can initialize its root video mix. Stock OBS 32.2.1 loads
-that profile and activates an empty scene collection before the plugin's finished-
-loading frontend callback.
-
-`obs_reset_video` is intentionally not called by the plugin: OBS has already made the
-root video active before third-party module callbacks run, and the public API rejects a
-reset while video is active. The plugin therefore verifies the observed configuration
-and fails closed if it is not base/output 1920x1080 at 60/1. On the finished-loading
-frontend callback, `DeterministicTestEnvironment` removes stock OBS's sole empty
-placeholder scene and verifies zero remaining input and scene sources, creates both
-scenes with `obs_scene_create`, resolves the latest stock
-`color_source` type with `obs_get_latest_input_type_id`, creates fixed 1920x1080 color
-sources with `obs_source_create`, and attaches them with `obs_scene_add`. All actions
-and failures are emitted under `[sync-bootstrap]`.
-
-The coordinator is started only after the bootstrap succeeds. This preserves the
-existing invariant that both scene renders consume the same coordinator-issued
-`MasterFrame`; bootstrap failure cannot silently fall back to independently named or
-previously configured scenes.
+The optional research launcher may reset a disposable portable runtime and write a
+deterministic video profile for reproducible encoder tests. That preparation is
+outside the production plugin. It never supplies scene names or scene objects to the
+plugin: production discovery sees the resulting real collection through the same
+public topology path as a normal OBS launch.
 
 ## Replay Save Contract
 

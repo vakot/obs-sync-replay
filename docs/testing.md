@@ -205,7 +205,28 @@ portable OBS instance, observing the `[obs-sync-replay] plugin loaded` log entry
 closing OBS normally with the matching unload entry. These checks establish module
 integration only and are not synchronization evidence.
 
-## Clean Runtime and Topology Validation
+## Normal startup and topology validation
+
+Production-like acceptance uses the existing portable OBS environment:
+
+```powershell
+./scripts/build.ps1
+./scripts/start.ps1
+```
+
+The normal launcher preserves the selected profile, scene collection, and settings.
+It does not write `user.ini` or `basic.ini`, reset `config`, select `Sync Replay
+Research`, or create synthetic scenes. The plugin waits for frontend readiness,
+discovers the current top-level scene collection, and remains idle with zero plugin
+encoders until Recording or Replay starts.
+
+Validate empty/new, one-scene, and many-scene collections. Zero real scenes is valid
+and produces Master only. A scene containing groups, nested scenes, and ordinary
+sources still produces one stream for that top-level scene; nested content must not
+become duplicate video streams.
+
+The following destructive research-runtime procedure is optional and is not normal
+startup evidence:
 
 The stock-OBS research experiment must be launched with
 `scripts/research.ps1` after `scripts/build.ps1`. The launcher resets the configured

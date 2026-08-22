@@ -84,24 +84,33 @@ The first configure downloads and prepares the pinned SDK in `.deps/`; later
 configures reuse it. Generated project files and binaries are placed beneath
 `build/windows-debug` and `build/windows-release`.
 
-## Build and Run Portable OBS
+## Normal development and manual testing
 
-Build and deploy the current project state:
+Build, deploy, and launch the existing portable OBS state:
 
 ```powershell
 .\scripts\build.ps1
+.\scripts\start.ps1
 ```
 
-Create and start the fixed research profile:
+`start.ps1` resolves the configured portable root, validates that the matching OBS
+process is stopped, and launches OBS with `--portable --multi`. It does not select a
+profile or write `user.ini`, `basic.ini`, settings, scene collections, or research
+scenes. Use `-Wait` to wait for OBS exit and `-SkipUpdateCheck` to pass OBS's updater
+option.
+
+Prepare an arbitrary collection once in OBS, close it normally, then use the two
+commands above. Verify that the selected profile and collection are preserved, the
+plugin discovers Master plus every top-level scene, the UI appears, and Recording
+and Replay remain idle with zero plugin encoders until explicitly started.
+
+## Destructive research runtime
+
+Use `research.ps1` only when a reproducible stock-OBS encoder experiment requires a
+reset portable runtime:
 
 ```powershell
 .\scripts\research.ps1 -SkipUpdateCheck
-```
-
-Once the profile exists, start it again without resetting manual settings:
-
-```powershell
-.\scripts\start.ps1 -SkipUpdateCheck
 ```
 
 The deployment layout matches OBS's Windows module paths:
@@ -115,27 +124,10 @@ The build script copies only the plugin DLL and its data files. It reports every
 destination and fails when the artifact, portable executable, or portable marker is
 missing.
 
-The build and research scripts together deploy and start the clean
-manual-testing instance. See
-[manual-testing.md](manual-testing.md) for the focused Replay configuration
-checks.
-
-## Clean Stock-OBS Research Runtime
-
-The stock-OBS experiment must start from a disposable clean runtime. After deploying
-the plugin, use the research script:
-
-```powershell
-.\scripts\research.ps1
-```
-
-The launcher refuses to reset a running portable OBS process, removes only the
-configured runtime's `config` directory while preserving this plugin's deployed static
-data and locale files, then creates
-the minimum profile file needed before OBS initializes video. It starts stock OBS
-with `--portable --multi --profile "Sync Replay Research"`. It does not create a
-scene collection, recording output, replay-buffer setting, encoder setting, or test
-source in the profile.
+The research launcher refuses to reset a running portable OBS process, removes only
+the configured runtime's `config` directory, writes the documented research profile,
+and may create research-only fixtures through separate tooling. It is intentionally
+destructive and must never be used for normal product startup.
 
 The generated profile contains exactly these video values:
 
@@ -150,10 +142,9 @@ ColorSpace=709   ColorRange=Partial
 The clean-runtime `user.ini` selects the generated profile and sets only
 `General/FirstRun=true` to prevent first-run sources. OBS's normal startup then
 activates its empty scene collection and initializes the video pipeline from the
-generated profile. The plugin waits for the frontend finished-loading event, checks
-the observed 1920x1080 at 60/1 configuration, and discovers whatever real scenes
-are present through `obs_enum_scenes()`. It does not create test scenes or use
-scene names as identity.
+generated profile. The plugin waits for the frontend finished-loading event and
+discovers whatever real top-level scenes are present through `obs_enum_scenes()`. It
+does not create test scenes or use scene names as identity.
 
 For topology acceptance, create at least four ordinary scenes in the portable
 collection after startup, or open a prepared collection, and use the `[topology]`
@@ -170,9 +161,8 @@ For a complete Debug iteration:
 .\scripts\research.ps1
 ```
 
-Use `start.ps1` instead of `research.ps1` when the existing manual profile should
-be preserved. The build script discovers the CMake executable bundled with Visual
-Studio when `cmake` is not on `PATH`.
+The build script discovers the CMake executable bundled with Visual Studio when
+`cmake` is not on `PATH`.
 
 ## Fast Iteration Loop
 
@@ -206,7 +196,7 @@ Normal shutdown contains the matching `plugin unloaded` entry.
 
 ## Visual Studio Debugging
 
-1. Run `scripts/build.ps1`, then `scripts/research.ps1`; note the exact PID printed by the script.
+1. Run `scripts/build.ps1`, then `scripts/start.ps1`; note the exact PID printed by the script.
 2. In Visual Studio, select **Debug > Attach to Process**.
 3. Select that PID and use the Native code debugger.
 4. Add `build\windows-debug\Debug` to the symbol locations if the PDB is not found
