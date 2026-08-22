@@ -1,5 +1,82 @@
 # Phase 8 audio research
 
+## Current continuation decision: shared global OBS tracks
+
+The original isolated-scene requirement and its stock-OBS blocker are preserved
+below as historical research. The approved Phase 8 MVP product decision is
+different: do not add an OBS patch and do not build a plugin-side scene mixer.
+Every output uses the same OBS global/Program audio tracks. Per-scene audio
+is therefore intentionally not isolated in this MVP.
+
+This decision passes the continuation implementation gate because the required
+MVP semantics are the stock global mixer semantics, which are available through
+public OBS APIs.
+
+### MVP audio contract
+
+- The active OBS Recording profile is the audio configuration source of truth.
+- Enabled recording mixer indices are mapped in OBS's ascending mux-track order.
+- If six tracks are configured, every output contains six audio tracks: Master,
+  every scene, and Replay all expose tracks 1 through 6.
+- A configured track remains present and may be silent; it is never removed
+  because no source currently contributes audio.
+- Track routing, mute/volume, filters, global devices, sample rate, channel
+  layout, and encoder selection follow the one global OBS Program mix. The
+  plugin does not reinterpret them per scene.
+- One audio encoder is created for each configured global mixer track,
+  independently of the number of video scenes. Its encoded packets are shared
+  with Recording and Replay; Save Replay writes those packets without audio
+  re-encoding.
+
+The implemented topology is:
+
+```text
+OBS global Program mixer track 1..N
+                |
+      one OBS audio encoder per track
+                |
+       shared encoded packet fan-out
+          /                    \
+  Recording MKV           Replay ring -> Save Replay MKV
+```
+
+The common video frame CTS remains the interval authority. Audio packets retain
+their OBS timestamps and audio timebase; consumers map them into that common
+interval and the packet-only MKV writer creates the configured video plus
+audio stream structure for each output.
+
+### Profile configuration boundary
+
+The runtime reads the same profile keys used by stock OBS Recording:
+
+- Simple mode reads `SimpleOutput/RecTracks`, `RecAudioEncoder`, and
+  `ABitrate`.
+- Advanced mode reads `AdvOut/RecTracks`, falls back to `TrackIndex` when the
+  mask is zero, selects `RecAudioEncoder` or the configured stream encoder when
+  it is `none`, and reads `Track1Bitrate` through `Track6Bitrate`.
+- Enabled mixer indices are emitted in ascending order. A configured track is
+  represented in every `PacketStreamConfig` even when its packet history is
+  empty, preserving silent-track presence.
+- OBS's special single-track Stream/FLV cases remain single-track cases; normal
+  MKV Recording uses the enabled multi-track mask.
+
+Exact idle-time encoder JSON settings are not available through the frontend
+profile boundary in all modes. The implementation applies the profile bitrate
+and encoder defaults deterministically; runtime encoder extradata is taken from
+the created OBS encoder before muxing when it becomes available.
+
+### Lifecycle and synchronization boundary
+
+The shared audio encoder set is created once for the capture epoch, starts when
+the first Recording or Replay consumer needs capture, remains active while
+either consumer remains active, and is released only after both consumers are
+off. Scene discovery does not change its topology. Audio packet callbacks are
+short-lived ingestion calls; the capture session owns retained packet lifetime,
+while Recording and Replay own their asynchronous queues/snapshots.
+
+The current implementation does not claim isolated scene audio. That remains a
+future API requirement, not an implicit product policy or a workaround.
+
 ## Required conclusion
 
 ### C. BLOCKED BY STOCK OBS API — STOP
@@ -283,3 +360,12 @@ OBS Scene B scene-audio render -> configured audio encoders
 Only after that API is available and the comparison tests prove exact behavior
 for the cases above may audio implementation begin. Until then, production
 audio must remain stopped.
+
+## Continuation implementation status
+
+The preceding sections retain the original isolated-scene research conclusion
+and are not a claim that the MVP has isolated scene audio. For the approved MVP,
+the implementation gate is satisfied by the public global Program mix
+architecture documented at the start of this report. The implementation is
+limited to that shared global-track contract; no custom mixer, OBS patch, or
+private frontend/libobs dependency is used.
