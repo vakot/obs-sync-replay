@@ -1,4 +1,5 @@
 #include "topology/obs-scene-topology.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include <obs-module.h>
 
@@ -33,12 +34,12 @@ bool CollectScene(void* param, obs_source_t* source) {
     const char* uuid = obs_source_get_uuid(source);
     const char* name = obs_source_get_name(source);
     if (!uuid || !*uuid || !name || !*name) {
-        blog(LOG_WARNING, "[topology] scene-skipped reason=missing-public-uuid-or-name");
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "topology", "scene-skipped reason=missing-public-uuid-or-name");
         return true;
     }
     obs_source_t* retained = obs_source_get_ref(source);
     if (!retained) {
-        blog(LOG_ERROR, "[topology] scene-skipped uuid=%s reason=source-reference-failed", uuid);
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "topology", "scene-skipped uuid=%s reason=source-reference-failed", uuid);
         return true;
     }
     DiscoveredObsScene discovered;

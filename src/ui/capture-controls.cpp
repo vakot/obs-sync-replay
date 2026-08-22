@@ -1,4 +1,5 @@
 #include "ui/capture-controls.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include "control/plugin-capture-runtime.hpp"
 #include "ui/capture-controls-state.hpp"
@@ -137,8 +138,8 @@ void CaptureControls::Report(const char* action, const ControlCommandResult& res
     if (QString::fromUtf8(action) == QStringLiteral("replay-toggle")) {
         replay_failed_ = failed;
     }
-    blog(failed ? LOG_ERROR : LOG_INFO, "[plugin-ui] action=%s status=%s reason=%s", action,
-         ControlCommandStatusName(result.status), result.reason.c_str());
+    OBS_SYNC_REPLAY_LOG(failed ? LOG_ERROR : LOG_INFO, "ui", "action=%s status=%s reason=%s", action,
+                        ControlCommandStatusName(result.status), result.reason.c_str());
     ApplyPresentationSafely();
 }
 
@@ -151,14 +152,14 @@ void CaptureControls::ApplyPresentationSafely() {
         recording_button_->setEnabled(false);
         replay_button_->setEnabled(false);
         save_replay_button_->setEnabled(false);
-        blog(LOG_ERROR, "[plugin-ui] presentation update failed with exception=%s", error.what());
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "ui", "presentation update failed with exception=%s", error.what());
     } catch (...) {
         disabled_ = true;
         refresh_timer_->stop();
         recording_button_->setEnabled(false);
         replay_button_->setEnabled(false);
         save_replay_button_->setEnabled(false);
-        blog(LOG_ERROR, "[plugin-ui] presentation update failed with unknown exception");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "ui", "presentation update failed with unknown exception");
     }
 }
 

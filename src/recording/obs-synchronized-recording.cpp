@@ -1,4 +1,5 @@
 #include "recording/obs-synchronized-recording.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include "muxing/mkv-packet-writer.hpp"
 #include "recording/synchronized-recording-session.hpp"
@@ -41,7 +42,7 @@ bool ShutdownRequested(const std::atomic<bool>* shutdown_requested) {
 }
 
 void LogOutputFailure(const char* stage, const char* stream_id, obs_output_t* output) {
-    blog(LOG_ERROR, "[sync-recording] output-failure stage=%s stream=%s error=%s", stage, stream_id,
+    OBS_SYNC_REPLAY_LOG(LOG_ERROR, "recording", "output-failure stage=%s stream=%s error=%s", stage, stream_id,
          output && obs_output_get_last_error(output) ? obs_output_get_last_error(output) : "none");
 }
 
@@ -94,8 +95,8 @@ void OnRecordingPacket(obs_output_t*, struct encoder_packet* packet, struct enco
         return;
     }
     if (!packet_time || packet->size == 0 || packet->timebase_num <= 0 || packet->timebase_den <= 0) {
-        blog(LOG_ERROR,
-             "[sync-recording] packet-rejected stream=%s invariant=source-CTS-and-packet-time-required",
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "recording",
+             "packet-rejected stream=%s invariant=source-CTS-and-packet-time-required",
              context->stream_id);
         context->session->Abort();
         return;
@@ -117,7 +118,7 @@ void OnRecordingPacket(obs_output_t*, struct encoder_packet* packet, struct enco
     copy.keyframe = packet->keyframe;
     copy.payload.assign(packet->data, packet->data + packet->size);
     if (!context->session->SubmitPacket(context->stream, std::move(copy))) {
-        blog(LOG_ERROR, "[sync-recording] packet-rejected stream=%s failure=%s", context->stream_id,
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "recording", "packet-rejected stream=%s failure=%s", context->stream_id,
              SynchronizedRecordingFailureName(context->session->failure()));
     }
 }
@@ -156,7 +157,7 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
         return;
     }
     if (obs_encoder_load_state(encoder_id) != OBS_MODULE_ENABLED) {
-        blog(LOG_WARNING, "[sync-recording] skipped encoder=%s reason=stock-module-not-loaded", encoder_id);
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "recording", "skipped encoder=%s reason=stock-module-not-loaded", encoder_id);
         return;
     }
 
@@ -164,7 +165,7 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
     std::error_code directory_error;
     std::filesystem::create_directories(output_directory, directory_error);
     if (directory_error) {
-        blog(LOG_ERROR, "[sync-recording] output-directory-failed path=%s error=%s", output_directory.string().c_str(),
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "recording", "output-directory-failed path=%s error=%s", output_directory.string().c_str(),
              directory_error.message().c_str());
         return;
     }
@@ -244,7 +245,7 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
         }
 
         if (started_a && started_b) {
-            blog(LOG_INFO, "[sync-recording] started encoder=%s outputs=A,B duration_seconds=%u", encoder_id,
+            OBS_SYNC_REPLAY_LOG(LOG_INFO, "recording", "started encoder=%s outputs=A,B duration_seconds=%u", encoder_id,
                  duration_seconds);
             const auto warmup_deadline =
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(warmup_milliseconds);
@@ -278,10 +279,10 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
     if (started_a || started_b) {
         obs_output_stop(output_a);
         obs_output_stop(output_b);
-        blog(LOG_INFO, "[sync-recording] outputs-stop-requested encoder=%s", encoder_id);
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "recording", "outputs-stop-requested encoder=%s", encoder_id);
         WaitForOutputInactive(output_a);
         WaitForOutputInactive(output_b);
-        blog(LOG_INFO, "[sync-recording] outputs-inactive encoder=%s active_a=%s active_b=%s", encoder_id,
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "recording", "outputs-inactive encoder=%s active_a=%s active_b=%s", encoder_id,
              output_a && obs_output_active(output_a) ? "true" : "false",
              output_b && obs_output_active(output_b) ? "true" : "false");
     }
@@ -298,8 +299,8 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
         const SynchronizedRecordingMetrics metrics = session->metrics();
         const MkvWriteResult& write_a = sink_a_diagnostics->result();
         const MkvWriteResult& write_b = sink_b_diagnostics->result();
-        blog(session->state() == SynchronizedRecordingState::Stopped ? LOG_INFO : LOG_ERROR,
-             "[sync-recording] result encoder=%s state=%s failure=%s common_start_cts=%llu common_end_cts=%llu "
+        OBS_SYNC_REPLAY_LOG(session->state() == SynchronizedRecordingState::Stopped ? LOG_INFO : LOG_ERROR, "recording",
+             "result encoder=%s state=%s failure=%s common_start_cts=%llu common_end_cts=%llu "
              "pre_roll_packets_a=%llu pre_roll_packets_b=%llu pre_roll_bytes_a=%llu pre_roll_bytes_b=%llu "
              "tail_packets_a=%llu tail_packets_b=%llu tail_bytes_a=%llu tail_bytes_b=%llu peak_retained_bytes=%llu "
              "peak_tail_bytes_a=%llu peak_tail_bytes_b=%llu committed_watermark_cts=%llu "
@@ -331,11 +332,11 @@ void RunSynchronizedRecording(const char* encoder_id, video_t* video_a, video_t*
              static_cast<unsigned long long>(write_a.finalization_time_ms),
              static_cast<unsigned long long>(write_b.finalization_time_ms));
         if (session->state() != SynchronizedRecordingState::Stopped) {
-            blog(LOG_ERROR, "[sync-recording] mux-diagnostics encoder=%s sink_a=%s sink_b=%s", encoder_id,
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "recording", "mux-diagnostics encoder=%s sink_a=%s sink_b=%s", encoder_id,
                  sink_a_diagnostics ? sink_a_diagnostics->error().c_str() : "unavailable",
                  sink_b_diagnostics ? sink_b_diagnostics->error().c_str() : "unavailable");
         }
-        blog(LOG_INFO, "[sync-recording] result-logged encoder=%s", encoder_id);
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "recording", "result-logged encoder=%s", encoder_id);
     }
 
     Release(output_a, output_b, encoder_a, encoder_b, audio_encoder_a, audio_encoder_b, group);

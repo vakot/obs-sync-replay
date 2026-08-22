@@ -63,7 +63,7 @@ an explicit coordinated plugin shutdown before OBS destroys the owned resources;
 the later collection-changed event starts a fresh idle runtime.
 
 Every discovery, epoch snapshot, staged update, pending apply, and failure is
-reported under `[topology]` with identity, display name, order, participation, and
+reported under `[obs-sync-replay] topology:` with identity, display name, order, participation, and
 epoch state. A failed rebuild is explicit; the runtime never silently substitutes
 another scene or shifts a later frame into a removed scene's temporal slot.
 

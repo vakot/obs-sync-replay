@@ -1,4 +1,5 @@
 #include "ui/obs-controls-adapter.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include "ui/capture-controls.hpp"
 
@@ -67,7 +68,7 @@ bool ObsControlsAdapter::Install(CaptureControls& controls) {
     CopyNativeAppearance(native_replay_button_, controls.replay_button());
     CopyNativeAppearance(native_save_replay_button_, controls.save_replay_button());
     installed_ = true;
-    blog(LOG_INFO, "[plugin-ui] native controls replaced dock=controlsDock record=recordButton replay=replayBufferButton "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "ui", "native controls replaced dock=controlsDock record=recordButton replay=replayBufferButton "
                    "save=saveReplayButton");
     return true;
 }
@@ -116,7 +117,7 @@ void ObsControlsAdapter::Restore() noexcept {
     extra_native_controls_.clear();
     installed_ = false;
     if (restored_count > 0) {
-        blog(LOG_INFO, "[plugin-ui] native controls restored count=%zu", restored_count);
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "ui", "native controls restored count=%zu", restored_count);
     }
 }
 
@@ -130,24 +131,24 @@ bool ObsControlsAdapter::installed() const noexcept {
 
 bool ObsControlsAdapter::Replace(QPushButton* native, QPushButton* replacement) {
     if (!native || !replacement || !controls_parent_) {
-        blog(LOG_WARNING, "[plugin-ui] replace failed stage=arguments");
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "replace failed stage=arguments");
         return false;
     }
     QBoxLayout* layout = FindContainingLayout(controls_parent_->layout(), native);
     if (!layout) {
-        blog(LOG_WARNING, "[plugin-ui] replace failed stage=containing-layout native=%s parent=%s",
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "replace failed stage=containing-layout native=%s parent=%s",
              native->objectName().toUtf8().constData(), native->parentWidget() ? native->parentWidget()->objectName().toUtf8().constData() : "none");
         return false;
     }
     const int index = layout->indexOf(native);
     if (index < 0) {
-        blog(LOG_WARNING, "[plugin-ui] replace failed stage=layout-index native=%s layout=%s",
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "replace failed stage=layout-index native=%s layout=%s",
              native->objectName().toUtf8().constData(), layout->objectName().toUtf8().constData());
         return false;
     }
     QLayoutItem* item = layout->itemAt(index);
     if (!item) {
-        blog(LOG_WARNING, "[plugin-ui] replace failed stage=layout-item native=%s layout=%s index=%d",
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "replace failed stage=layout-item native=%s layout=%s index=%d",
              native->objectName().toUtf8().constData(), layout->objectName().toUtf8().constData(), index);
         return false;
     }
@@ -214,7 +215,7 @@ bool ObsControlsAdapter::ReconcileNativeControl(const QString& object_name, QPus
         native->setVisible(false);
         native->setEnabled(false);
         extra_native_controls_.push_back(restoration);
-        blog(LOG_WARNING, "[plugin-ui] native control reconciled object=%s action=detached-reintroduced-widget",
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "native control reconciled object=%s action=detached-reintroduced-widget",
              object_name.toUtf8().constData());
         reconciled = true;
     }
@@ -302,7 +303,7 @@ void ObsControlsAdapter::CopyNativeAppearance(QPushButton* native, QPushButton* 
 }
 
 void ObsControlsAdapter::Fail(const char* reason) const {
-    blog(LOG_WARNING, "[plugin-ui] native-control-replacement-unavailable reason=%s", reason);
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "ui", "native-control-replacement-unavailable reason=%s", reason);
 }
 
 } // namespace obs_sync_replay

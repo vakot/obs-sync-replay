@@ -147,7 +147,8 @@ discovers whatever real top-level scenes are present through `obs_enum_scenes()`
 does not create test scenes or use scene names as identity.
 
 For topology acceptance, create at least four ordinary scenes in the portable
-collection after startup, or open a prepared collection, and use the `[topology]`
+collection after startup, or open a prepared collection, and use the
+`[obs-sync-replay] topology:`
 log records described in [`scene-topology.md`](scene-topology.md). The clean
 launcher and plugin log every reset, profile creation, video check, discovery,
 epoch snapshot, staged update, and coordinated shutdown. A run is invalid if

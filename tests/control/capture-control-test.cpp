@@ -55,6 +55,21 @@ CaptureConfiguration Configuration(const StreamParticipationMode master, const S
     return configuration;
 }
 
+CaptureConfiguration DynamicConfiguration(const size_t scene_count) {
+    CaptureConfiguration configuration;
+    configuration.replay.enabled = true;
+    configuration.replay.target_duration_ns = 1;
+    configuration.replay.memory_budget_bytes = 1024 * 1024;
+    configuration.streams.push_back(
+        {StreamIdentity::Master(), "master", StreamParticipationMode::Both, StreamConfig()});
+    for (size_t index = 0; index < scene_count; ++index) {
+        configuration.streams.push_back({StreamIdentity::Scene("scene-uuid-" + std::to_string(index)),
+                                         "Scene " + std::to_string(index + 1),
+                                         StreamParticipationMode::Both, StreamConfig()});
+    }
+    return configuration;
+}
+
 void RemovePaths(const std::vector<std::filesystem::path>& paths) {
     for (const auto& path : paths) {
         std::error_code error;
@@ -231,6 +246,27 @@ void TestReplayConfigurationLifecycle() {
     Require(engine.StopReplay().ok() && engine.StopRecording().ok(), "configured replay lifecycle must stop cleanly");
 }
 
+void TestDynamicStreamCounts() {
+    for (const size_t scene_count : {size_t{0}, size_t{1}, size_t{3}, size_t{7}}) {
+        CaptureConfiguration configuration = DynamicConfiguration(scene_count);
+        SynchronizedCaptureSession capture;
+        FakeEncoderController encoders;
+        CaptureControlEngine engine(configuration, capture, encoders);
+        const size_t expected_stream_count = scene_count + 1;
+        Require(engine.Initialize(), "initialize dynamic stream engine");
+        Require(engine.StartReplay().ok(), "dynamic replay must start");
+        Require(engine.active_encoder_count() == expected_stream_count,
+                "dynamic replay must use exactly one encoder per active stream");
+        Require(engine.StartRecording(Paths("dynamic-recording", expected_stream_count)).ok(),
+                "dynamic recording must attach to replay");
+        Require(engine.active_encoder_count() == expected_stream_count,
+                "combined consumers must not duplicate dynamic encoders");
+        Require(engine.StopRecording().ok(), "dynamic recording must stop");
+        Require(engine.StopReplay().ok(), "dynamic replay must stop");
+        Require(engine.active_encoder_count() == 0, "dynamic stop must release all encoders");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -238,5 +274,6 @@ int main() {
     TestHandoffAndEncoderOwnership();
     TestMixedModesAndInvalidCommands();
     TestReplayConfigurationLifecycle();
+    TestDynamicStreamCounts();
     return EXIT_SUCCESS;
 }

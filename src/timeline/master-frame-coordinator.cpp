@@ -1,4 +1,5 @@
 #include "timeline/master-frame-coordinator.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include <obs-module.h>
 
@@ -14,7 +15,7 @@ MasterFrameCoordinator::~MasterFrameCoordinator() {
 
 void MasterFrameCoordinator::Start() {
     if (running_) {
-        blog(LOG_WARNING, "[sync-timeline] coordinator start ignored: already running");
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "timeline", "coordinator start ignored: already running");
         return;
     }
 
@@ -27,7 +28,7 @@ void MasterFrameCoordinator::Start() {
 
     RefreshTimingConfiguration();
     obs_add_tick_callback(OnObsTick, this);
-    blog(LOG_INFO, "[sync-timeline] coordinator started; PTS units=nanoseconds");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "timeline", "coordinator started; PTS units=nanoseconds");
 }
 
 void MasterFrameCoordinator::Stop() {
@@ -42,7 +43,7 @@ void MasterFrameCoordinator::Stop() {
     timeline_.Reset();
     timing_configuration_.Reset();
     last_observed_pts_ns_.reset();
-    blog(LOG_INFO, "[sync-timeline] coordinator stopped");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "timeline", "coordinator stopped");
 }
 
 void MasterFrameCoordinator::OnObsTick(void *const parameter, float) {
@@ -63,7 +64,7 @@ void MasterFrameCoordinator::ObserveObsTick() {
         const char *const reason = result == MasterFrameObservationResult::NonMonotonicPts
                                        ? "non-monotonic PTS"
                                        : "master frame ID exhausted";
-        blog(LOG_ERROR, "[sync-timeline] invariant=3 rejected master PTS=%llu reason=%s",
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "timeline", "invariant=3 rejected master PTS=%llu reason=%s",
              static_cast<unsigned long long>(pts_ns), reason);
         return;
     }
@@ -75,8 +76,8 @@ void MasterFrameCoordinator::ObserveObsTick() {
         last_observed_pts_ns_.has_value() && frame_interval_ns.has_value()) {
         const uint64_t delta_ns = pts_ns - *last_observed_pts_ns_;
         if (delta_ns != *frame_interval_ns) {
-            blog(LOG_WARNING,
-                 "[sync-timeline] observed OBS cadence discontinuity previous_pts=%llu master_pts=%llu "
+            OBS_SYNC_REPLAY_LOG(LOG_WARNING, "timeline",
+                 "observed OBS cadence discontinuity previous_pts=%llu master_pts=%llu "
                  "delta_ns=%llu configured_interval_ns=%llu lagged_frames=%u; no frames were fabricated",
                  static_cast<unsigned long long>(*last_observed_pts_ns_), static_cast<unsigned long long>(pts_ns),
                  static_cast<unsigned long long>(delta_ns), static_cast<unsigned long long>(*frame_interval_ns),
@@ -87,8 +88,8 @@ void MasterFrameCoordinator::ObserveObsTick() {
 
     const uint32_t current_lagged_frames = obs_get_lagged_frames();
     if (current_lagged_frames != lagged_frames_) {
-        blog(LOG_WARNING,
-             "[sync-timeline] OBS graphics lag changed previous_lagged_frames=%u lagged_frames=%u "
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "timeline",
+             "OBS graphics lag changed previous_lagged_frames=%u lagged_frames=%u "
              "master_frame_id=%llu master_pts=%llu",
              lagged_frames_, current_lagged_frames, static_cast<unsigned long long>(frame.frame_id()),
              static_cast<unsigned long long>(frame.pts_ns()));
@@ -96,18 +97,18 @@ void MasterFrameCoordinator::ObserveObsTick() {
     }
 
     if (frame.frame_id() < 3 || frame.frame_id() % 300 == 0) {
-        blog(LOG_INFO, "[sync-timeline] master_frame_id=%llu master_pts=%llu",
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "timeline", "master_frame_id=%llu master_pts=%llu",
              static_cast<unsigned long long>(frame.frame_id()), static_cast<unsigned long long>(frame.pts_ns()));
     } else {
-        blog(LOG_DEBUG, "[sync-timeline] master_frame_id=%llu master_pts=%llu",
+        OBS_SYNC_REPLAY_LOG(LOG_DEBUG, "timeline", "master_frame_id=%llu master_pts=%llu",
              static_cast<unsigned long long>(frame.frame_id()), static_cast<unsigned long long>(frame.pts_ns()));
     }
 
     try {
         frame_sink_(frame);
     } catch (...) {
-        blog(LOG_ERROR,
-             "[sync-timeline] frame sink failed master_frame_id=%llu master_pts=%llu; "
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "timeline",
+             "frame sink failed master_frame_id=%llu master_pts=%llu; "
              "the coordinator retained its canonical timeline",
              static_cast<unsigned long long>(frame.frame_id()), static_cast<unsigned long long>(frame.pts_ns()));
     }
@@ -119,8 +120,8 @@ MasterFrameTimingConfigurationResult MasterFrameCoordinator::RefreshTimingConfig
         timing_configuration_.ObserveFrameInterval(obs_get_frame_interval_ns());
     if (result == MasterFrameTimingConfigurationResult::InvalidInterval) {
         if (!invalid_timing_configuration_logged_) {
-            blog(LOG_ERROR,
-                 "[sync-timeline] invalid OBS timing configuration frame_interval_ns=0; "
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "timeline",
+                 "invalid OBS timing configuration frame_interval_ns=0; "
                  "cadence validation paused without changing the master timeline");
             invalid_timing_configuration_logged_ = true;
         }
@@ -136,14 +137,14 @@ MasterFrameTimingConfigurationResult MasterFrameCoordinator::RefreshTimingConfig
     const bool has_video_info = obs_get_video_info(&video_info);
     const uint64_t frame_interval_ns = *timing_configuration_.frame_interval_ns();
     if (result == MasterFrameTimingConfigurationResult::Changed) {
-        blog(LOG_INFO,
-             "[sync-timeline] OBS timing configuration changed previous_interval_ns=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "timeline",
+             "OBS timing configuration changed previous_interval_ns=%llu "
              "frame_interval_ns=%llu fps_num=%u fps_den=%u; master timeline remains continuous",
              static_cast<unsigned long long>(*previous_interval_ns), static_cast<unsigned long long>(frame_interval_ns),
              has_video_info ? video_info.fps_num : 0, has_video_info ? video_info.fps_den : 0);
     } else {
-        blog(LOG_INFO,
-             "[sync-timeline] OBS timing fps_num=%u fps_den=%u frame_interval_ns=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "timeline",
+             "OBS timing fps_num=%u fps_den=%u frame_interval_ns=%llu "
              "PTS units=nanoseconds source=obs_get_video_frame_time",
              has_video_info ? video_info.fps_num : 0, has_video_info ? video_info.fps_den : 0,
              static_cast<unsigned long long>(frame_interval_ns));

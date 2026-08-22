@@ -1,4 +1,5 @@
 #include "rendering/synchronized-scene-renderer.hpp"
+#include "plugin/plugin-log.hpp"
 
 #include <obs-module.h>
 
@@ -43,8 +44,8 @@ SynchronizedSceneRenderer::~SynchronizedSceneRenderer() {
 
 void SynchronizedSceneRenderer::Render(const MasterFrame& master_frame) {
     if (stopped_) {
-        blog(LOG_ERROR,
-             "[sync-render] invariant=2 rejected render after stop master_frame_id=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "render",
+             "invariant=2 rejected render after stop master_frame_id=%llu "
              "master_pts=%llu",
              static_cast<unsigned long long>(master_frame.frame_id()),
              static_cast<unsigned long long>(master_frame.pts_ns()));
@@ -52,8 +53,8 @@ void SynchronizedSceneRenderer::Render(const MasterFrame& master_frame) {
     }
 
     if (!pair_tracker_.Begin(master_frame)) {
-        blog(LOG_ERROR,
-             "[sync-render] invariant=1 duplicate or reentrant dispatch master_frame_id=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "render",
+             "invariant=1 duplicate or reentrant dispatch master_frame_id=%llu "
              "master_pts=%llu",
              static_cast<unsigned long long>(master_frame.frame_id()),
              static_cast<unsigned long long>(master_frame.pts_ns()));
@@ -71,8 +72,8 @@ void SynchronizedSceneRenderer::Render(const MasterFrame& master_frame) {
     obs_leave_graphics();
 
     if (!pair_tracker_.IsComplete()) {
-        blog(LOG_ERROR,
-             "[sync-render] invariant=4 incomplete render pair master_frame_id=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "render",
+             "invariant=4 incomplete render pair master_frame_id=%llu "
              "master_pts=%llu; "
              "later frames will not fill this slot",
              static_cast<unsigned long long>(master_frame.frame_id()),
@@ -110,8 +111,8 @@ void SynchronizedSceneRenderer::CaptureAndLog(const SceneRenderResult& output_a,
         result == SynchronizedFramePipelineResult::Retained
             ? (sampled || status_changed ? LOG_INFO : LOG_DEBUG)
             : (result == SynchronizedFramePipelineResult::InvalidPair ? LOG_ERROR : LOG_WARNING);
-    blog(log_level,
-         "[sync-pipeline] master_frame_id=%llu master_pts=%llu status=%s reason=%s queue_size=%zu "
+    OBS_SYNC_REPLAY_LOG(log_level, "pipeline",
+         "master_frame_id=%llu master_pts=%llu status=%s reason=%s queue_size=%zu "
          "queue_capacity=%zu",
          static_cast<unsigned long long>(master_frame.frame_id()),
          static_cast<unsigned long long>(master_frame.pts_ns()),
@@ -121,8 +122,8 @@ void SynchronizedSceneRenderer::CaptureAndLog(const SceneRenderResult& output_a,
 
 void SynchronizedSceneRenderer::RecordAndLog(const SceneRenderResult& result) {
     if (!pair_tracker_.Record(result)) {
-        blog(LOG_ERROR,
-             "[sync-render] invariant=4 rejected duplicate or stale result master_frame_id=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "render",
+             "invariant=4 rejected duplicate or stale result master_frame_id=%llu "
              "master_pts=%llu output=%s",
              static_cast<unsigned long long>(result.master_frame.frame_id()),
              static_cast<unsigned long long>(result.master_frame.pts_ns()),
@@ -143,8 +144,8 @@ void SynchronizedSceneRenderer::RecordAndLog(const SceneRenderResult& result) {
     const int log_level = result.status == SceneRenderStatus::Rendered
                               ? (sampled ? LOG_INFO : LOG_DEBUG)
                               : LOG_WARNING;
-    blog(log_level,
-         "[sync-render] invariant=4 master_frame_id=%llu master_pts=%llu output=%s scene=%s "
+    OBS_SYNC_REPLAY_LOG(log_level, "render",
+         "invariant=4 master_frame_id=%llu master_pts=%llu output=%s scene=%s "
          "width=%u height=%u "
          "color_space=%u color_format=%u status=%s",
          static_cast<unsigned long long>(result.master_frame.frame_id()),

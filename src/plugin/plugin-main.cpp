@@ -5,6 +5,7 @@
 #include <QtWidgets/QWidget>
 
 #include "control/plugin-capture-runtime.hpp"
+#include "plugin/plugin-log.hpp"
 #include "ui/capture-controls.hpp"
 #include "ui/obs-controls-adapter.hpp"
 
@@ -24,8 +25,8 @@ obs_hotkey_pair_id replay_hotkeys = OBS_INVALID_HOTKEY_PAIR_ID;
 obs_hotkey_id save_replay_hotkey = OBS_INVALID_HOTKEY_ID;
 
 void LogCommand(const char* action, const obs_sync_replay::ControlCommandResult& result) {
-    blog(result.ok() ? LOG_INFO : LOG_ERROR, "[plugin-control] action=%s status=%s reason=%s", action,
-         obs_sync_replay::ControlCommandStatusName(result.status), result.reason.c_str());
+    OBS_SYNC_REPLAY_LOG(result.ok() ? LOG_INFO : LOG_ERROR, "control", "action=%s status=%s reason=%s", action,
+                        obs_sync_replay::ControlCommandStatusName(result.status), result.reason.c_str());
 }
 
 bool OnStartRecordingHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pressed) {
@@ -53,7 +54,7 @@ bool OnStartReplayHotkey(void* data, obs_hotkey_pair_id, obs_hotkey_t*, bool pre
     }
     (void)runtime->RefreshReplayConfiguration();
     if (!runtime->replay_available()) {
-        blog(LOG_INFO, "[plugin-hotkey] replay-start-rejected reason=replay-unavailable-by-obs-config");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "hotkey", "replay-start-rejected reason=replay-unavailable-by-obs-config");
         return false;
     }
     if (runtime->replay_state() != obs_sync_replay::ReplayConsumerState::Off) {
@@ -102,9 +103,10 @@ void RegisterPluginHotkeys() {
         capture_runtime.get());
     save_replay_hotkey = obs_hotkey_register_frontend("OBS Sync Replay.SaveReplay", "Save Synchronized Replay",
                                                       OnSaveReplayHotkey, capture_runtime.get());
-    blog(LOG_INFO, "[plugin-hotkey] registered recording=%llu replay=%llu save=%llu",
-         static_cast<unsigned long long>(recording_hotkeys), static_cast<unsigned long long>(replay_hotkeys),
-         static_cast<unsigned long long>(save_replay_hotkey));
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "hotkey", "registered recording=%llu replay=%llu save=%llu",
+                        static_cast<unsigned long long>(recording_hotkeys),
+                        static_cast<unsigned long long>(replay_hotkeys),
+                        static_cast<unsigned long long>(save_replay_hotkey));
 }
 
 void UnregisterPluginHotkeys() {
@@ -142,7 +144,7 @@ void StopPluginOwnedRuntime(const char* boundary) {
         capture_runtime->Stop();
     }
     capture_runtime.reset();
-    blog(LOG_INFO, "[sync-shutdown] boundary=%s complete plugin-owned runtime stopped", boundary);
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "shutdown", "boundary=%s complete plugin-owned runtime stopped", boundary);
 }
 
 void StartPluginOwnedRuntime() {
@@ -153,7 +155,7 @@ void StartPluginOwnedRuntime() {
 
     capture_runtime = std::make_unique<obs_sync_replay::PluginCaptureRuntime>();
     if (!capture_runtime->Initialize()) {
-        blog(LOG_ERROR, "[obs-sync-replay] plugin-owned runtime initialization failed");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "plugin", "plugin-owned runtime initialization failed");
         capture_runtime.reset();
         return;
     }
@@ -172,14 +174,14 @@ void StartPluginOwnedRuntime() {
             controls_adapter.reset();
         }
     } catch (const std::exception& error) {
-        blog(LOG_ERROR, "[plugin-ui] integration failed with exception=%s", error.what());
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "ui", "integration failed with exception=%s", error.what());
         if (controls_adapter) {
             controls_adapter->Restore();
         }
         capture_controls.reset();
         controls_adapter.reset();
     } catch (...) {
-        blog(LOG_ERROR, "[plugin-ui] integration failed with unknown exception");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "ui", "integration failed with unknown exception");
         if (controls_adapter) {
             controls_adapter->Restore();
         }
@@ -187,8 +189,8 @@ void StartPluginOwnedRuntime() {
         controls_adapter.reset();
     }
     RegisterPluginHotkeys();
-    blog(LOG_INFO,
-         "[obs-sync-replay] plugin-owned controls ready ui_replaced=%s recording=off replay=off replay_available=%s "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "ui",
+         "plugin-owned controls ready ui_replaced=%s recording=off replay=off replay_available=%s "
          "active_encoders=0",
          capture_controls ? "true" : "false", capture_runtime->replay_available() ? "true" : "false");
 }
@@ -248,24 +250,25 @@ MODULE_EXPORT const char* obs_module_description(void) {
 
 bool obs_module_load(void) {
     shutdown_requested.store(false, std::memory_order_release);
-    blog(LOG_INFO, "[obs-sync-replay] plugin loaded (version %s); plugin-owned capture idle", OBS_SYNC_REPLAY_VERSION);
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "plugin", "plugin loaded (version %s); plugin-owned capture idle",
+                        OBS_SYNC_REPLAY_VERSION);
     return true;
 }
 
 void obs_module_post_load(void) {
     frontend_registered = true;
     obs_frontend_add_event_callback(OnFrontendEvent, nullptr);
-    blog(LOG_INFO,
-         "[obs-sync-replay] waiting for OBS frontend finished-loading before discovering the current scene collection; "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "plugin",
+         "waiting for OBS frontend finished-loading before discovering the current scene collection; "
          "capture remains idle");
 }
 
 void obs_module_unload(void) {
-    blog(LOG_INFO, "[sync-shutdown] module-unload begin");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "shutdown", "module-unload begin");
     StopPluginOwnedRuntime("module-unload");
     if (frontend_registered) {
         obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
         frontend_registered = false;
     }
-    blog(LOG_INFO, "[obs-sync-replay] plugin unloaded");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "plugin", "plugin unloaded");
 }

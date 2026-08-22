@@ -3,6 +3,7 @@
 #include "capture/synchronized-capture-session.hpp"
 #include "config/obs-replay-configuration.hpp"
 #include "control/capture-control.hpp"
+#include "plugin/plugin-log.hpp"
 #include "recording/synchronized-recording-consumer.hpp"
 #include "replay/synchronized-replay-consumer.hpp"
 #include "topology/obs-scene-topology.hpp"
@@ -68,7 +69,7 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
         return;
     }
     if (packet->size == 0 || !packet_time || packet->timebase_num <= 0 || packet->timebase_den <= 0) {
-        blog(LOG_ERROR, "[plugin-control] packet-rejected stream=%s invariant=source-cts-and-packet-timing-required",
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "packet-rejected stream=%s invariant=source-cts-and-packet-timing-required",
              context->stream_name);
         return;
     }
@@ -90,7 +91,7 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
     }
     const uint64_t source_cts = copy.source_cts;
     if (!context->capture->Ingest(context->stream_id, std::move(copy), std::move(extra_data))) {
-        blog(LOG_ERROR, "[plugin-control] packet-rejected stream=%s invariant=capture-session-accepted-packet-required",
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "packet-rejected stream=%s invariant=capture-session-accepted-packet-required",
              context->stream_name);
         return;
     }
@@ -98,7 +99,7 @@ void OnOutputPacket(obs_output_t *, struct encoder_packet *packet, struct encode
     context->last_source_cts = source_cts;
     if (context->packet_count == 1) {
         context->first_source_cts = source_cts;
-        blog(LOG_INFO, "[plugin-control] first-encoded-packet stream=%s source_cts=%llu capture_stream_ready=true",
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "first-encoded-packet stream=%s source_cts=%llu capture_stream_ready=true",
              context->stream_name, static_cast<unsigned long long>(source_cts));
     }
 }
@@ -142,7 +143,7 @@ obs_data_t *CreateVideoSettings(const char *encoder_id) {
 }
 
 void LogOutputFailure(const char *stage, const StreamResources &stream) {
-    blog(LOG_ERROR, "[plugin-control] output-failure stage=%s identity=%s stream_id=%u error=%s", stage,
+    OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "output-failure stage=%s identity=%s stream_id=%u error=%s", stage,
          StreamIdentityLabel(stream.identity).c_str(),
          static_cast<unsigned int>(stream.capture_id),
          stream.output && obs_output_get_last_error(stream.output) ? obs_output_get_last_error(stream.output) : "none");
@@ -157,19 +158,19 @@ void WaitForOutputInactive(obs_output_t *output) {
 void ReleaseStream(StreamResources &stream) {
     if (stream.video_encoder && stream.grouped) {
         if (!obs_encoder_set_group(stream.video_encoder, nullptr)) {
-            blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed identity=%s",
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "encoder-group-detach-failed identity=%s",
                  StreamIdentityLabel(stream.identity).c_str());
             return;
         } else {
-            blog(LOG_INFO, "[plugin-control] encoder-group-detached identity=%s",
+            OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-group-detached identity=%s",
                  StreamIdentityLabel(stream.identity).c_str());
         }
         stream.grouped = false;
     }
     if (stream.output && stream.callback.capture) {
         obs_output_remove_packet_callback(stream.output, OnOutputPacket, &stream.callback);
-        blog(LOG_INFO,
-             "[plugin-control] packet-stream-stopped stream=%s encoded_packets=%llu first_source_cts=%llu "
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control",
+             "packet-stream-stopped stream=%s encoded_packets=%llu first_source_cts=%llu "
              "last_source_cts=%llu",
              StreamIdentityLabel(stream.identity).c_str(), static_cast<unsigned long long>(stream.callback.packet_count),
              static_cast<unsigned long long>(stream.callback.first_source_cts),
@@ -285,11 +286,11 @@ class PluginEncoderController final : public EncoderController {
             for (StreamResources& candidate : resources_) {
                 if (candidate.video_encoder && candidate.grouped) {
                     if (!obs_encoder_set_group(candidate.video_encoder, nullptr)) {
-                        blog(LOG_ERROR, "[plugin-control] encoder-group-detach-failed identity=%s",
+                        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "encoder-group-detach-failed identity=%s",
                              StreamIdentityLabel(candidate.identity).c_str());
                     } else {
                         candidate.grouped = false;
-                        blog(LOG_INFO, "[plugin-control] encoder-group-detached identity=%s",
+                        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-group-detached identity=%s",
                              StreamIdentityLabel(candidate.identity).c_str());
                     }
                 }
@@ -301,7 +302,7 @@ class PluginEncoderController final : public EncoderController {
                 }
             }
         }
-        blog(LOG_INFO, "[plugin-control] encoder-release stream=%s family=%s", stream.name.c_str(), encoder_id_);
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-release stream=%s family=%s", stream.name.c_str(), encoder_id_);
     }
 
     bool IsActive(const CaptureStreamId stream_id) const noexcept override {
@@ -328,6 +329,11 @@ class PluginEncoderController final : public EncoderController {
 
     bool CreateResource(const CaptureStreamId stream_id, const ConfiguredStream& stream) {
         if (stream_id >= resources_.size() || stream_id >= capture_videos_.size()) {
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "capture",
+                                "failed stage=stream-prepare identity=%s stream_id=%u reason=resource-index-out-of-range "
+                                "resources=%zu capture_videos=%zu invariant=one-resource-per-active-stream",
+                                StreamIdentityLabel(stream.identity).c_str(), static_cast<unsigned int>(stream_id),
+                                resources_.size(), capture_videos_.size());
             return false;
         }
         StreamResources& resource = Resource(stream_id);
@@ -344,8 +350,8 @@ class PluginEncoderController final : public EncoderController {
             obs_data_release(audio_settings);
         }
         if (!resource.video_encoder || !resource.audio_encoder || !resource.output) {
-            blog(LOG_ERROR,
-                 "[plugin-control] encoder-create-failed identity=%s stream_id=%u video=%s audio=%s output=%s "
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control",
+                 "encoder-create-failed identity=%s stream_id=%u video=%s audio=%s output=%s "
                  "invariant=all-stream-resources-required",
                  StreamIdentityLabel(stream.identity).c_str(), static_cast<unsigned int>(stream_id),
                  resource.video_encoder ? "created" : "missing", resource.audio_encoder ? "created" : "missing",
@@ -365,14 +371,14 @@ class PluginEncoderController final : public EncoderController {
         if (group_) {
             resource.grouped = obs_encoder_set_group(resource.video_encoder, group_);
             if (!resource.grouped) {
-                blog(LOG_ERROR, "[plugin-control] encoder-group-join-failed stream=%s reason=group-already-started",
+                OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "encoder-group-join-failed stream=%s reason=group-already-started",
                      stream.name.c_str());
                 ReleaseStream(resource);
                 return false;
             }
         }
         resource.capture_id = stream_id;
-        blog(LOG_INFO, "[plugin-control] encoder-create stream=%s family=%s", stream.name.c_str(), encoder_id_);
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-create stream=%s family=%s", stream.name.c_str(), encoder_id_);
         return true;
     }
 };
@@ -393,7 +399,7 @@ struct PluginCaptureRuntime::ControlState final {
         if (!group) {
             return;
         }
-        resources.resize(capture_videos.size());
+        resources.resize(this->capture_videos.size());
         controller = std::make_unique<PluginEncoderController>(encoder_id, group, capture,
                                                                 this->capture_videos, resources);
         control = std::make_unique<CaptureControlEngine>(
@@ -404,7 +410,7 @@ struct PluginCaptureRuntime::ControlState final {
                                         : diagnostic.event == EncoderLifecycleEvent::Retained
                                               ? "retain"
                                               : diagnostic.event == EncoderLifecycleEvent::Released ? "release" : "create";
-                blog(LOG_INFO, "[plugin-control] encoder-%s stream_id=%u active_encoder_count=%llu", event,
+                OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "encoder-%s stream_id=%u active_encoder_count=%llu", event,
                      static_cast<unsigned int>(diagnostic.stream_id),
                      static_cast<unsigned long long>(diagnostic.active_encoder_count));
             });
@@ -439,7 +445,7 @@ const char* SelectPluginEncoder() {
     if (obs_encoder_load_state(kNvencEncoderId) == OBS_MODULE_ENABLED) {
         return kNvencEncoderId;
     }
-    blog(LOG_WARNING, "[plugin-control] encoder-fallback requested=nvenc fallback=obs_x264");
+    OBS_SYNC_REPLAY_LOG(LOG_WARNING, "control", "encoder-fallback requested=nvenc fallback=obs_x264");
     return kX264EncoderId;
 }
 
@@ -452,7 +458,7 @@ PluginCaptureRuntime::~PluginCaptureRuntime() {
 
 bool PluginCaptureRuntime::Initialize() {
     if (control_state_) {
-        blog(LOG_WARNING, "[plugin-control] initialize-ignored reason=already-initialized");
+        OBS_SYNC_REPLAY_LOG(LOG_WARNING, "control", "initialize-ignored reason=already-initialized");
         return false;
     }
 
@@ -465,27 +471,27 @@ bool PluginCaptureRuntime::Initialize() {
     if (topology_model_.ApplyDiscovery(metadata, false) == TopologyUpdateResult::Unchanged) {
         // The initial model always contains Master, but keep this path explicit
         // so a future persisted topology cannot silently bypass construction.
-        blog(LOG_INFO, "[topology] initial-discovery unchanged");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "topology", "initial-discovery unchanged");
     }
     state_->pending_scenes.clear();
     if (!InstallSceneTargets(std::move(discovered))) {
-        blog(LOG_ERROR, "[plugin-control] setup-failed reason=scene-topology-target-create");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "setup-failed reason=scene-topology-target-create");
         Stop();
         return false;
     }
     if (!BuildControlState()) {
-        blog(LOG_ERROR, "[plugin-control] setup-failed reason=control-engine-initialize");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "setup-failed reason=control-engine-initialize");
         Stop();
         return false;
     }
 
-    blog(LOG_INFO,
-         "[plugin-config] source=obs-profile replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu "
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "config",
+         "source=obs-profile replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu "
          "memory_limit_configured=%s status=applied reason=initial-profile-read",
          replay_configuration_.enabled ? "true" : "false",
          static_cast<unsigned long long>(replay_configuration_.target_duration_ns),
          replay_configuration_.memory_budget_bytes, replay_configuration_.memory_limit_configured ? "true" : "false");
-    blog(LOG_INFO, "[plugin-control] initialized idle=true active_encoder_count=0");
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "initialized idle=true active_encoder_count=0");
     LogTopology("initial-discovery");
     return true;
 }
@@ -505,7 +511,7 @@ bool PluginCaptureRuntime::InstallSceneTargets(std::vector<DiscoveredObsScene> d
         if (std::any_of(state_->scenes.begin(), state_->scenes.end(), [&entry](const auto& target) {
                 return target.topology.identity == entry->identity;
             })) {
-            blog(LOG_WARNING, "[topology] scene-skipped identity=%s reason=duplicate-discovery",
+            OBS_SYNC_REPLAY_LOG(LOG_WARNING, "topology", "scene-skipped identity=%s reason=duplicate-discovery",
                  entry->identity.key.c_str());
             continue;
         }
@@ -576,7 +582,7 @@ bool PluginCaptureRuntime::BuildControlState() {
             return target.topology.identity == entry.identity;
         });
         if (scene == state_->scenes.end() || !scene->video) {
-            blog(LOG_ERROR, "[topology] scene-missing identity=%s name=%s reason=target-not-created",
+            OBS_SYNC_REPLAY_LOG(LOG_ERROR, "topology", "scene-missing identity=%s name=%s reason=target-not-created",
                  entry.identity.key.c_str(), entry.display_name.c_str());
             return false;
         }
@@ -615,7 +621,7 @@ void PluginCaptureRuntime::FinishCaptureEpochIfIdle() {
     control_state_->control->Shutdown();
     control_state_.reset();
     if (!InstallSceneTargets(std::move(pending)) || !BuildControlState()) {
-        blog(LOG_ERROR, "[topology] pending-apply-failed invariant=active-epoch-ended");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "topology", "pending-apply-failed invariant=active-epoch-ended");
     } else {
         LogTopology("pending-applied");
     }
@@ -625,12 +631,12 @@ void PluginCaptureRuntime::LogTopology(const char* event) const {
     const SceneTopologySnapshot& topology = topology_model_.capture_epoch_active() ? topology_model_.active_epoch()
                                                                                      : topology_model_.current();
     const size_t top_level_scene_count = topology.streams.empty() ? 0 : topology.streams.size() - 1;
-    blog(LOG_INFO,
-         "[topology] event=%s generation=%llu top_level_scene_count=%zu stream_count=%zu epoch_active=%s pending=%s",
+    OBS_SYNC_REPLAY_LOG(LOG_INFO, "topology",
+         "event=%s generation=%llu top_level_scene_count=%zu stream_count=%zu epoch_active=%s pending=%s",
          event, static_cast<unsigned long long>(topology.generation), top_level_scene_count, topology.streams.size(),
          topology_model_.capture_epoch_active() ? "true" : "false", topology_model_.has_pending() ? "true" : "false");
     for (const SceneTopologyEntry& entry : topology.streams) {
-        blog(LOG_INFO, "[topology] stream kind=%s identity=%s name=%s order=%zu recording=%s replay=%s",
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "topology", "stream kind=%s identity=%s name=%s order=%zu recording=%s replay=%s",
              StreamKindName(entry.identity.kind), entry.identity.key.c_str(), entry.display_name.c_str(),
              entry.collection_order, entry.recording_enabled ? "true" : "false", entry.replay_enabled ? "true" : "false");
     }
@@ -665,7 +671,7 @@ std::vector<std::filesystem::path> PluginCaptureRuntime::OutputPaths(const Captu
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error) {
-        blog(LOG_ERROR, "[plugin-control] output-directory-failed path=%s error=%s", directory.string().c_str(),
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "control", "output-directory-failed path=%s error=%s", directory.string().c_str(),
              error.message().c_str());
         return paths;
     }
@@ -691,7 +697,8 @@ ControlCommandResult PluginCaptureRuntime::StartRecording() {
     const ControlCommandResult result =
         control_state_->control->StartRecording(OutputPaths(CaptureConsumer::Recording, stem.c_str()));
     if (result.ok() && control_state_->control->recording_state() == RecordingConsumerState::Running) {
-        blog(LOG_INFO, "[plugin-control] recording-consumer-attached streams=3 shared_capture_running=true");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "recording-consumer-attached streams=%zu shared_capture_running=true",
+                            control_state_->capture.stream_count());
     }
     if (!result.ok() && control_state_->control->replay_state() == ReplayConsumerState::Off) {
         (void)topology_model_.EndCaptureEpoch();
@@ -717,8 +724,8 @@ ControlCommandResult PluginCaptureRuntime::StopRecording() {
     }
     const ControlCommandResult result = control_state_->control->StopRecording();
     if (const auto recording = control_state_->control->recording_result()) {
-        blog(recording->success ? LOG_INFO : LOG_ERROR,
-             "[plugin-control] recording-finalized success=%s packets_muxed=%llu first_source_cts=%llu "
+        OBS_SYNC_REPLAY_LOG(recording->success ? LOG_INFO : LOG_ERROR, "control",
+             "recording-finalized success=%s packets_muxed=%llu first_source_cts=%llu "
              "last_source_cts=%llu streams=%llu error=%s",
              recording->success ? "true" : "false", static_cast<unsigned long long>(recording->packet_count),
              static_cast<unsigned long long>(recording->range.start_cts),
@@ -742,7 +749,8 @@ ControlCommandResult PluginCaptureRuntime::StartReplay() {
     }
     const ControlCommandResult result = control_state_->control->StartReplay();
     if (result.ok() && control_state_->control->replay_state() == ReplayConsumerState::Running) {
-        blog(LOG_INFO, "[plugin-control] replay-ring-attached streams=3 shared_capture_running=true retention=true");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "replay-ring-attached streams=%zu shared_capture_running=true retention=true",
+                            control_state_->capture.stream_count());
     }
     if (!result.ok() && control_state_->control->recording_state() == RecordingConsumerState::Off) {
         (void)topology_model_.EndCaptureEpoch();
@@ -772,7 +780,7 @@ ControlCommandResult PluginCaptureRuntime::SaveReplay() {
         control_state_->control->SaveReplay(OutputPaths(CaptureConsumer::Replay, stem.c_str()));
     if (result.ok()) {
         ++replay_save_generation_;
-        blog(LOG_INFO, "[plugin-control] replay-history-snapshot requested=true async_mux=true");
+        OBS_SYNC_REPLAY_LOG(LOG_INFO, "control", "replay-history-snapshot requested=true async_mux=true");
     }
     return result;
 }
@@ -800,8 +808,8 @@ ControlCommandResult PluginCaptureRuntime::ApplyReplayConfiguration(ReplayConfig
         return {ControlCommandStatus::Succeeded, "replay-config-stored"};
     }
     const ControlCommandResult result = control_state_->control->ApplyReplayConfiguration(configuration);
-    blog(result.ok() ? LOG_INFO : LOG_ERROR,
-         "[plugin-config] replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu memory_limit_configured=%s "
+    OBS_SYNC_REPLAY_LOG(result.ok() ? LOG_INFO : LOG_ERROR, "config",
+         "replay enabled=%s duration_ns=%llu memory_budget_bytes=%zu memory_limit_configured=%s "
          "status=%s reason=%s",
          configuration.enabled ? "true" : "false",
          static_cast<unsigned long long>(configuration.target_duration_ns), configuration.memory_budget_bytes,
@@ -840,7 +848,7 @@ ControlCommandResult PluginCaptureRuntime::RefreshSceneTopology() {
     control_state_->control->Shutdown();
     control_state_.reset();
     if (!InstallSceneTargets(std::move(discovered)) || !BuildControlState()) {
-        blog(LOG_ERROR, "[topology] discovery-apply-failed invariant=idle-topology-rebuild");
+        OBS_SYNC_REPLAY_LOG(LOG_ERROR, "topology", "discovery-apply-failed invariant=idle-topology-rebuild");
         return Failed("scene-topology-rebuild");
     }
     LogTopology("discovery-applied");
@@ -853,8 +861,8 @@ void PluginCaptureRuntime::PollReplaySave() noexcept {
         control_state_->control->PollReplaySave();
         if (const auto replay = control_state_->control->replay_result();
             replay && replay_result_logged_generation_ < replay_save_generation_) {
-            blog(replay->success ? LOG_INFO : LOG_ERROR,
-                 "[plugin-control] replay-finalized success=%s payload_bytes=%llu first_source_cts=%llu "
+            OBS_SYNC_REPLAY_LOG(replay->success ? LOG_INFO : LOG_ERROR, "control",
+                 "replay-finalized success=%s payload_bytes=%llu first_source_cts=%llu "
                  "last_source_cts=%llu streams=%llu error=%s",
                  replay->success ? "true" : "false",
                  static_cast<unsigned long long>(replay->snapshot_payload_bytes),
