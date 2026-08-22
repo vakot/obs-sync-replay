@@ -324,3 +324,17 @@ future OBS update must re-check those object names and layout entries.
 The product runtime also logs creation before activation for every non-disabled stream.
 This is expected: resources are pre-created to keep the OBS encoder group complete,
 while only aggregate-demand streams contribute active output and packet callbacks.
+
+### Frontend-event compatibility validation
+
+The Phase 7 follow-up audit is documented in
+[`frontend-event-compatibility.md`](frontend-event-compatibility.md). It traces the
+OBS 32.2.1 stock event producers, public callback/state APIs, script callback path,
+stock output/path getters, and the no-duplicate ownership boundary. The clean
+portable runtime observer confirms plugin-owned idle startup/shutdown with stock
+outputs inactive and native controls restored. A standard event sequence for
+plugin-owned actions is intentionally not claimed because OBS provides no supported
+public event emitter and the UI automation bridge is not available in the
+validation environment. The output-substitution audit is source-level: no public
+frontend output registration or replacement boundary exists, so no dummy output was
+started or left running for compatibility purposes.
