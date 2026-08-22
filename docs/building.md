@@ -85,18 +85,17 @@ configures reuse it. Generated project files and binaries are placed beneath
 
 ## Deploy and Run Portable OBS
 
-Deploy Debug, then launch the explicitly configured portable executable:
+Build, deploy, and launch the clean portable manual-testing instance:
 
 ```powershell
-.\scripts\deploy-dev.ps1 -Configuration Debug
-.\scripts\run-obs-dev.ps1
+.\scripts\start-manual-test.ps1 -SkipUpdateCheck
 ```
 
-Pass `-SkipUpdateCheck` to the launcher, or to `dev.ps1` when building and
+Pass `-SkipUpdateCheck` to `start-manual-test.ps1`, or to `dev.ps1` when building and
 launching together, to pass OBS's public `--disable-updater` startup option:
 
 ```powershell
-.\scripts\run-obs-dev.ps1 -SkipUpdateCheck
+.\scripts\start-manual-test.ps1 -SkipUpdateCheck
 .\scripts\dev.ps1 -SkipUpdateCheck
 ```
 
@@ -111,21 +110,15 @@ The deploy script copies only the plugin DLL and its data files. It reports ever
 destination and fails when the artifact, portable executable, or portable marker is
 missing.
 
-For the shortest manual-testing workflow, use the combined launcher:
-
-```powershell
-.\scripts\start-manual-test.ps1 -SkipUpdateCheck
-```
-
-This builds, deploys, resets only the configured portable test profile, and
-starts the clean manual-testing instance. See
+The combined launcher builds, deploys, resets only the configured portable test
+profile, and starts the clean manual-testing instance. See
 [manual-testing.md](manual-testing.md) for the focused Replay configuration
 checks.
 
 ## Clean Stock-OBS Research Runtime
 
 The stock-OBS experiment must start from a disposable clean runtime. After deploying
-the plugin, use the research launcher rather than `run-obs-dev.ps1`:
+the plugin, use the research launcher directly:
 
 ```powershell
 .\scripts\run-obs-research.ps1
@@ -179,15 +172,13 @@ After first-time setup:
 
 ```text
 edit
--> cmake --build --preset windows-debug
--> .\scripts\deploy-dev.ps1 -Configuration Debug
--> close only the portable OBS process
--> .\scripts\run-obs-dev.ps1
+-> .\scripts\dev.ps1 -SkipUpdateCheck
 -> inspect the portable OBS log
 ```
 
-The scripts never stop an OBS process. Close the specific portable instance normally
-before overwriting an in-use DLL; never terminate every `obs64.exe` process.
+The launch workflow resets only the configured portable test profile and refuses
+to modify a running instance. Close the specific portable instance normally
+before rerunning it; never terminate every `obs64.exe` process.
 
 Portable logs are under:
 
@@ -205,15 +196,14 @@ Normal shutdown contains the matching `plugin unloaded` entry.
 
 ## Visual Studio Debugging
 
-1. Build and deploy `windows-debug`.
-2. Start OBS with `scripts/run-obs-dev.ps1`; note the exact PID printed by the script.
-3. In Visual Studio, select **Debug > Attach to Process**.
-4. Select that PID and use the Native code debugger.
-5. Add `build\windows-debug\Debug` to the symbol locations if the PDB is not found
+1. Start the clean Debug instance with `scripts/start-manual-test.ps1`; note the exact PID printed by the script.
+2. In Visual Studio, select **Debug > Attach to Process**.
+3. Select that PID and use the Native code debugger.
+4. Add `build\windows-debug\Debug` to the symbol locations if the PDB is not found
    automatically.
 
 This attaches to the portable process without committing a machine-specific Visual
-Studio user file. The run script uses the configured executable directly and passes
+Studio user file. The launcher uses the configured executable directly and passes
 `--portable --multi`; it never launches the user's normal OBS installation.
 
 ## Formatting and Static Analysis

@@ -29,5 +29,5 @@ if (-not $NoLaunch) {
   if ($SkipUpdateCheck) {
     $launchArguments.SkipUpdateCheck = $true
   }
-  & (Join-Path $PSScriptRoot 'run-obs-dev.ps1') @launchArguments
+  & (Join-Path $PSScriptRoot 'run-obs-research.ps1') @launchArguments
 }
