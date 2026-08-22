@@ -1,8 +1,7 @@
 # Architecture
 
-This document turns the product model in [`../mvp-plan.md`](../mvp-plan.md) into
-implementation boundaries, source organization, and architectural decisions that
-protect synchronization invariants.
+This document defines implementation boundaries, source organization, and
+architectural decisions that protect synchronization invariants.
 
 ## Synchronization Contract
 
@@ -35,8 +34,8 @@ position alone, or elapsed wall-clock time.
 ## Guarantee Boundary
 
 OBS sources and capture devices may have different exposure, buffering, transport,
-decode, or source-frame latencies before the plugin renders them. Those upstream
-latencies are visible content and are outside the MVP guarantee.
+ decode, or source-frame latencies before the plugin renders them. Those upstream
+ latencies are visible content and are outside the synchronization guarantee.
 
 The guarantee begins when the plugin selects a shared master video tick. From that
 point onward, both scene renderings, encoder submissions, replay selection, and muxed
@@ -372,7 +371,7 @@ of temporal identity may not be.
 
 ## Scope and Evolution
 
-The MVP has exactly two outputs at one FPS. Prefer clear A/B types or a fixed-size
+The product has exactly two outputs at one FPS. Prefer clear A/B types or a fixed-size
 two-output representation over a speculative arbitrary-output framework. New
 abstractions are justified only by current behavior, testing, ownership, or safety.
 

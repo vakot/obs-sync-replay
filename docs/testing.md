@@ -43,7 +43,7 @@ Run paired saves at these minimum durations:
 | --- | --- | --- |
 | 60 seconds | Fast regression | Equal bounds/counts and zero offset |
 | 5 minutes | Repeated-save and moderate-run check | Zero accumulating drift |
-| 30 minutes | MVP endurance acceptance | Zero accumulating drift across multiple arbitrary saves |
+| 30 minutes | Endurance acceptance | Zero accumulating drift across multiple arbitrary saves |
 
 No test may accept accumulating drift as "close enough." A mismatch of one temporal
 slot is a synchronization failure, even if total durations are similar.
@@ -184,8 +184,8 @@ affected contract:
   or state transition is affected.
 
 A synchronization-critical task is not done until the relevant invariant is observed
-passing and any new failure mode is visible in diagnostics. The MVP is not done until
-the 30-minute scenario in `mvp-plan.md` passes with multiple arbitrary replay saves
+passing and any new failure mode is visible in diagnostics. The product is not complete until
+the 30-minute scenario passes with multiple arbitrary replay saves
 and zero frame-offset divergence.
 
 ## Bootstrap Validation
