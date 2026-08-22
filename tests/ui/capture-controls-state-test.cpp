@@ -22,6 +22,8 @@ CaptureControlsLabels LocalizedLabels() {
     labels.recording_unavailable = "Localized recording unavailable";
     labels.replay_buffer_unavailable = "Localized replay buffer unavailable";
     labels.action_unavailable = "Localized capture action unavailable";
+    labels.recording_tooltip = "Localized recording ownership help";
+    labels.replay_tooltip = "Localized replay ownership help";
     return labels;
 }
 
@@ -44,6 +46,9 @@ void TestIdlePresentation() {
             "idle recording button");
     Require(presentation.replay.text == labels.start_replay_buffer && presentation.replay.enabled,
             "idle replay button");
+    Require(presentation.recording.plugin_owned_help_tooltip == labels.recording_tooltip &&
+                presentation.replay.plugin_owned_help_tooltip == labels.replay_tooltip,
+            "capture toggles must expose plugin-owned help text");
     Require(presentation.save_replay_text == labels.save_replay, "save label must come from localization");
     Require(!presentation.save_replay_visible, "save must be hidden while replay is inactive");
     Require(!presentation.save_replay_enabled, "save must be disabled while replay is inactive");
@@ -73,6 +78,9 @@ void TestTransitionsAndSave() {
     Require(active.save_replay_enabled, "save must be enabled while replay is active");
     Require(active.save_replay_text == labels.save_replay,
             "active save control must retain its localized accessibility label");
+    Require(active.recording.plugin_owned_help_tooltip == labels.recording_tooltip &&
+                active.replay.plugin_owned_help_tooltip == labels.replay_tooltip,
+            "active capture toggles must retain plugin-owned help text");
 
     const CaptureControlsPresentation saving = MakeCaptureControlsPresentation(
         CaptureInfrastructureState::Active, RecordingConsumerState::Running, ReplayConsumerState::Saving, true, false,
@@ -127,6 +135,9 @@ void TestLookupFallbacks() {
             "frontend lookup failure must use the safe plugin fallback");
     Require(!labels.recording_unavailable.empty() && labels.recording_unavailable != "UI.Capture.RecordingUnavailable",
             "plugin lookup failure must not expose a raw locale key");
+    Require(!labels.recording_tooltip.empty() && labels.recording_tooltip != "Controls.PluginOwned.RecordingTooltip" &&
+                !labels.replay_tooltip.empty() && labels.replay_tooltip != "Controls.PluginOwned.ReplayTooltip",
+            "plugin tooltip lookup failure must use English fallback text");
 }
 
 void TestObsAndPluginLookupKeys() {
@@ -165,6 +176,12 @@ void TestObsAndPluginLookupKeys() {
             if (std::string(key) == "UI.Capture.SavingReplay") {
                 return "Plugin localized saving replay";
             }
+            if (std::string(key) == "Controls.PluginOwned.RecordingTooltip") {
+                return "Plugin localized recording ownership help";
+            }
+            if (std::string(key) == "Controls.PluginOwned.ReplayTooltip") {
+                return "Plugin localized replay ownership help";
+            }
             return static_cast<const char *>(nullptr);
         });
     Require(labels.start_recording == "OBS localized start recording" &&
@@ -175,6 +192,9 @@ void TestObsAndPluginLookupKeys() {
                 labels.starting_replay_buffer == "Plugin localized starting replay" &&
                 labels.saving_replay == "Plugin localized saving replay",
             "plugin-only transitions must use plugin lookup keys");
+    Require(labels.recording_tooltip == "Plugin localized recording ownership help" &&
+                labels.replay_tooltip == "Plugin localized replay ownership help",
+            "plugin-owned tooltip text must use plugin lookup keys");
 }
 
 void TestDisabledReplayPresentation() {

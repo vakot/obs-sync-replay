@@ -97,6 +97,7 @@ add_library(
   src/ui/capture-controls.cpp
   src/ui/capture-controls-localization.cpp
   src/ui/obs-controls-adapter.cpp
+  src/ui/plugin-owned-help-button.cpp
 )
 target_link_libraries(
   obs-sync-replay
@@ -224,6 +225,39 @@ if(MSVC)
   target_compile_options(capture-controls-state-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
 endif()
 add_test(NAME capture-controls-state COMMAND capture-controls-state-test)
+
+add_executable(plugin-owned-help-indicator-test tests/ui/plugin-owned-help-indicator-test.cpp)
+target_include_directories(plugin-owned-help-indicator-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_features(plugin-owned-help-indicator-test PRIVATE cxx_std_17)
+if(MSVC)
+  target_compile_options(plugin-owned-help-indicator-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME plugin-owned-help-indicator COMMAND plugin-owned-help-indicator-test)
+
+add_executable(plugin-owned-help-button-test tests/ui/plugin-owned-help-button-test.cpp src/ui/plugin-owned-help-button.cpp)
+target_include_directories(
+  plugin-owned-help-button-test
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${_obs_qt_deps_dir}/include"
+)
+target_compile_features(plugin-owned-help-button-test PRIVATE cxx_std_17)
+target_link_libraries(
+  plugin-owned-help-button-test
+  PRIVATE
+    "${_obs_qt_deps_dir}/lib/Qt6Widgets.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Gui.lib"
+    "${_obs_qt_deps_dir}/lib/Qt6Core.lib"
+)
+if(MSVC)
+  target_compile_options(plugin-owned-help-button-test PRIVATE /W4 /permissive- /Zc:__cplusplus)
+endif()
+add_test(NAME plugin-owned-help-button COMMAND plugin-owned-help-button-test)
+set_tests_properties(
+  plugin-owned-help-button
+  PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_PLUGIN_PATH=${_obs_qt_deps_dir}/plugins;PATH=${_obs_qt_deps_dir}/bin"
+)
 
 add_test(
   NAME plugin-artifact

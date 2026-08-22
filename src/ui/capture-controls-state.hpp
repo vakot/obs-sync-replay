@@ -26,6 +26,7 @@ struct CaptureButtonPresentation final {
     std::string text;
     bool enabled = false;
     bool visible = true;
+    std::string plugin_owned_help_tooltip;
 };
 
 struct CaptureControlsPresentation final {
@@ -89,6 +90,9 @@ inline CaptureControlsPresentation MakeCaptureControlsPresentation(
             break;
         }
     }
+
+    presentation.recording.plugin_owned_help_tooltip = labels.recording_tooltip;
+    presentation.replay.plugin_owned_help_tooltip = labels.replay_tooltip;
 
     return presentation;
 }
