@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/plugin-owned-help-indicator.hpp"
+
 #include <QtCore/QRect>
 #include <QtCore/QString>
 #include <QtWidgets/QPushButton>
@@ -30,6 +32,7 @@ class PluginOwnedHelpButton final : public QPushButton {
 
   private:
     void ShowHelpTooltip(const QPoint& position);
+    PluginOwnedHelpIndicatorGeometry Geometry() const;
     QRect IndicatorRect() const;
     QRect HitRect() const;
 

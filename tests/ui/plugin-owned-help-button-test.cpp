@@ -4,6 +4,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStyle>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -40,8 +41,14 @@ void TestHelpAreaDoesNotInvokeMainAction() {
     Require(clicked == 1, "clicking the main button area must preserve toggle semantics");
 
     const QRect hit_rect = button.plugin_owned_help_hit_rect();
-    Require(button.width() - hit_rect.right() <= button.style()->pixelMetric(QStyle::PM_ButtonMargin),
-            "help hit area must be anchored near the right edge");
+    const int side = std::max(1, button.style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, &button));
+    const int expected_right_margin = std::max(
+        {(button.height() - side) / 2, button.style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr, &button),
+         button.contentsMargins().right()});
+    const QRect indicator = button.plugin_owned_help_indicator_rect();
+    Require(button.width() - indicator.right() - 1 == expected_right_margin,
+            "help indicator must use square-button padding for its right inset");
+    Require(hit_rect.right() >= indicator.right(), "help hit area must include the indicator");
     Click(button, hit_rect.center());
     Require(clicked == 1, "clicking the help indicator must not invoke the main action");
     Require(button.accessibleDescription() == QStringLiteral("Localized ownership help"),

@@ -123,15 +123,21 @@ void PluginOwnedHelpButton::ShowHelpTooltip(const QPoint& position) {
 }
 
 QRect PluginOwnedHelpButton::IndicatorRect() const {
-    const int side = std::max(1, style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, this));
-    const int margin = std::max(1, style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr, this));
-    return ToQRect(MakePluginOwnedHelpIndicatorGeometry(width(), height(), side, side, margin, margin / 2), false);
+    return ToQRect(Geometry(), false);
 }
 
 QRect PluginOwnedHelpButton::HitRect() const {
+    return ToQRect(Geometry(), true);
+}
+
+PluginOwnedHelpIndicatorGeometry PluginOwnedHelpButton::Geometry() const {
     const int side = std::max(1, style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, this));
-    const int margin = std::max(1, style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr, this));
-    return ToQRect(MakePluginOwnedHelpIndicatorGeometry(width(), height(), side, side, margin, margin / 2), true);
+    const int square_button_padding = std::max(0, (height() - side) / 2);
+    const int style_button_margin = std::max(0, style()->pixelMetric(QStyle::PM_ButtonMargin, nullptr, this));
+    const int explicit_button_padding = std::max(0, contentsMargins().right());
+    // Match the right inset of a square icon button while retaining any larger style or native padding.
+    const int right_margin = std::max({square_button_padding, style_button_margin, explicit_button_padding});
+    return MakePluginOwnedHelpIndicatorGeometry(width(), height(), side, side, right_margin, right_margin / 2);
 }
 
 } // namespace obs_sync_replay
