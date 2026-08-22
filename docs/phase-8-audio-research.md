@@ -12,6 +12,12 @@ This decision passes the continuation implementation gate because the required
 MVP semantics are the stock global mixer semantics, which are available through
 public OBS APIs.
 
+### A. PROVEN FEASIBLE — IMPLEMENT (approved MVP scope)
+
+The shared global-track MVP is proven feasible with stock OBS public APIs. The
+original exact per-scene-isolated requirement remains the separately recorded
+`C. BLOCKED BY STOCK OBS API — STOP` research result below.
+
 ### MVP audio contract
 
 - The active OBS Recording profile is the audio configuration source of truth.
