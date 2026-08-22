@@ -51,6 +51,8 @@ private:
     mutable std::mutex mutex_;
     uint64_t recording_number_ = 0;
     uint64_t replay_number_ = 0;
+    uint64_t replay_save_generation_ = 0;
+    uint64_t replay_result_logged_generation_ = 0;
 };
 
 } // namespace obs_sync_replay

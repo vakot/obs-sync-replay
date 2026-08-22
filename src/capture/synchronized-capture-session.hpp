@@ -41,6 +41,11 @@ struct ReplaySnapshot final {
     std::vector<std::vector<OwnedCapturedEncodedPacket>> packets;
 };
 
+struct ReplaySnapshotAttempt final {
+    std::optional<ReplaySnapshot> snapshot;
+    std::string reason;
+};
+
 struct SynchronizedCaptureConfig final {
     size_t ring_capacity_bytes = 30 * 1024 * 1024;
     uint64_t expected_source_cts_step = 0;
@@ -78,6 +83,9 @@ class SynchronizedCaptureSession final {
     std::optional<ReplaySnapshot> SnapshotCommonRange(uint64_t duration_ns) const;
     std::optional<ReplaySnapshot> SnapshotCommonRange(const std::vector<CaptureStreamId>& stream_ids,
                                                       uint64_t duration_ns) const;
+    ReplaySnapshotAttempt SnapshotCommonRangeDetailed(const std::vector<CaptureStreamId>& stream_ids,
+                                                      uint64_t duration_ns) const;
+    ReplaySnapshotAttempt SnapshotCommonRangeDetailed(uint64_t duration_ns) const;
     SynchronizedCaptureMetrics metrics() const noexcept;
 
   private:

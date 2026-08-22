@@ -250,14 +250,25 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(co
             stream_ids.push_back(stream_id);
         }
     }
-    return SnapshotCommonRange(stream_ids, duration_ns);
+    return SnapshotCommonRangeDetailed(stream_ids, duration_ns).snapshot;
 }
 
 std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
     const std::vector<CaptureStreamId>& stream_ids, const uint64_t duration_ns) const {
+    return SnapshotCommonRangeDetailed(stream_ids, duration_ns).snapshot;
+}
+
+ReplaySnapshotAttempt SynchronizedCaptureSession::SnapshotCommonRangeDetailed(
+    const std::vector<CaptureStreamId>& stream_ids, const uint64_t duration_ns) const {
     const std::lock_guard<std::mutex> lock(state_->mutex);
-    if (!state_->replay_retention_enabled || stream_ids.empty() || duration_ns == 0) {
-        return std::nullopt;
+    if (!state_->replay_retention_enabled) {
+        return {std::nullopt, "replay-retention-disabled"};
+    }
+    if (stream_ids.empty()) {
+        return {std::nullopt, "no-replay-streams"};
+    }
+    if (duration_ns == 0) {
+        return {std::nullopt, "invalid-duration"};
     }
     for (size_t index = 0; index < stream_ids.size(); ++index) {
         const CaptureStreamId stream_id = stream_ids[index];
@@ -265,7 +276,7 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
             std::find(stream_ids.begin(), stream_ids.begin() + static_cast<std::ptrdiff_t>(index), stream_id) !=
                 stream_ids.begin() + static_cast<std::ptrdiff_t>(index) ||
             state_->streams[stream_id].packets.empty()) {
-            return std::nullopt;
+            return {std::nullopt, "insufficient-history"};
         }
     }
 
@@ -277,7 +288,7 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
         earliest_last = std::min(earliest_last, stream.packets.rbegin()->first);
     }
     if (latest_first > earliest_last || earliest_last - latest_first < duration_ns) {
-        return std::nullopt;
+        return {std::nullopt, "insufficient-history"};
     }
 
     std::optional<uint64_t> start_cts;
@@ -299,7 +310,7 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
         }
     }
     if (!start_cts) {
-        return std::nullopt;
+        return {std::nullopt, "no-common-keyframe"};
     }
 
     uint64_t end_cts = *start_cts;
@@ -313,7 +324,7 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
         end_cts = cts;
     }
     if (end_cts < *start_cts) {
-        return std::nullopt;
+        return {std::nullopt, "no-common-range"};
     }
 
     ReplaySnapshot snapshot;
@@ -330,7 +341,19 @@ std::optional<ReplaySnapshot> SynchronizedCaptureSession::SnapshotCommonRange(
             snapshot.packets[index].push_back(it->second);
         }
     }
-    return snapshot;
+    return {std::move(snapshot), {}};
+}
+
+ReplaySnapshotAttempt SynchronizedCaptureSession::SnapshotCommonRangeDetailed(const uint64_t duration_ns) const {
+    std::vector<CaptureStreamId> stream_ids;
+    {
+        const std::lock_guard<std::mutex> lock(state_->mutex);
+        stream_ids.reserve(state_->streams.size());
+        for (CaptureStreamId stream_id = 0; stream_id < state_->streams.size(); ++stream_id) {
+            stream_ids.push_back(stream_id);
+        }
+    }
+    return SnapshotCommonRangeDetailed(stream_ids, duration_ns);
 }
 
 SynchronizedCaptureMetrics SynchronizedCaptureSession::metrics() const noexcept {
